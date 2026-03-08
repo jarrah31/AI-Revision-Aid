@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+    branches: ["main", "master"]
+
+jobs:
+  # ── Test suite ───────────────────────────────────────────────────────────────
+  test:
+    name: Run tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install runtime dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install dev / test dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Create required data directories
+        run: mkdir -p data/images data/pdfs lancedb
+
+      - name: Run test suite
+        env:
+          # Dummy values so config loads without a real .env
+          ANTHROPIC_API_KEY: ""
+          JWT_SECRET: "ci-test-secret-not-used-in-production"
+        run: |
+          pytest tests/ \
+            --tb=short \
+            -q \
+            --strict-markers
+
+  # ── Docker build ─────────────────────────────────────────────────────────────
+  docker:
+    name: Build Docker image
+    runs-on: ubuntu-latest
+    needs: test           # Only build after tests pass
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false        # Build only; push requires registry credentials
+          tags: revisionaid:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
