@@ -6,6 +6,7 @@ document.addEventListener('alpine:init', () => {
         loading: false,
         toast: null,
         toastTimeout: null,
+        route: '',   // current route name, set by Router on each navigation
 
         // Exchange rate (USD → GBP), updated on init
         gbpRate: 0.79,

@@ -70,6 +70,7 @@ const Router = {
 
             // Reinitialize Alpine on new content
             if (window.Alpine) {
+                Alpine.store('app').route = route;
                 Alpine.initTree(container);
             }
         } catch (e) {

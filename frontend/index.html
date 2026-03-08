@@ -25,14 +25,27 @@
 
                 <!-- Desktop nav -->
                 <div class="hidden sm:flex items-center gap-1">
-                    <a href="#home" class="px-3 py-2 rounded-md text-sm hover:bg-indigo-500 transition">Home</a>
-                    <a href="#upload" class="px-3 py-2 rounded-md text-sm hover:bg-indigo-500 transition">Upload</a>
-                    <a href="#quiz" class="px-3 py-2 rounded-md text-sm hover:bg-indigo-500 transition">Quiz</a>
-                    <a href="#shared" class="px-3 py-2 rounded-md text-sm hover:bg-indigo-500 transition">Shared</a>
-                    <a href="#dashboard" class="px-3 py-2 rounded-md text-sm hover:bg-indigo-500 transition">Dashboard</a>
-                    <a href="#subjects" class="px-3 py-2 rounded-md text-sm hover:bg-indigo-500 transition">Subjects</a>
+                    <a href="#home"
+                       :class="$store.app.route==='home' ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
+                       class="px-3 py-2 rounded-md text-sm transition">Home</a>
+                    <a href="#upload"
+                       :class="['upload','processing','upload-history','review'].includes($store.app.route) ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
+                       class="px-3 py-2 rounded-md text-sm transition">Upload</a>
+                    <a href="#quiz"
+                       :class="$store.app.route==='quiz' ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
+                       class="px-3 py-2 rounded-md text-sm transition">Quiz</a>
+                    <a href="#shared"
+                       :class="$store.app.route==='shared' ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
+                       class="px-3 py-2 rounded-md text-sm transition">Shared</a>
+                    <a href="#dashboard"
+                       :class="$store.app.route==='dashboard' ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
+                       class="px-3 py-2 rounded-md text-sm transition">Dashboard</a>
+                    <a href="#subjects"
+                       :class="$store.app.route==='subjects' ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
+                       class="px-3 py-2 rounded-md text-sm transition">Subjects</a>
                     <a href="#admin" x-show="$store.app.isAdmin"
-                       class="px-3 py-2 rounded-md text-sm hover:bg-indigo-500 transition bg-indigo-700">Admin</a>
+                       :class="$store.app.route==='admin' ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
+                       class="px-3 py-2 rounded-md text-sm transition">Admin</a>
 
                     <!-- Profile dropdown -->
                     <div class="relative ml-2" x-data="{ open: false }" @click.outside="open = false">
@@ -83,15 +96,30 @@
                     <span x-show="$store.app.isAdmin"
                           class="bg-yellow-400 text-yellow-900 text-xs font-bold px-1.5 py-0.5 rounded">ADMIN</span>
                 </div>
-                <a href="#home" @click="mobileOpen=false" class="block px-3 py-2 rounded-md hover:bg-indigo-500">Home</a>
-                <a href="#upload" @click="mobileOpen=false" class="block px-3 py-2 rounded-md hover:bg-indigo-500">Upload</a>
-                <a href="#quiz" @click="mobileOpen=false" class="block px-3 py-2 rounded-md hover:bg-indigo-500">Quiz</a>
-                <a href="#shared" @click="mobileOpen=false" class="block px-3 py-2 rounded-md hover:bg-indigo-500">Shared</a>
-                <a href="#dashboard" @click="mobileOpen=false" class="block px-3 py-2 rounded-md hover:bg-indigo-500">Dashboard</a>
-                <a href="#subjects" @click="mobileOpen=false" class="block px-3 py-2 rounded-md hover:bg-indigo-500">Subjects</a>
+                <a href="#home" @click="mobileOpen=false"
+                   :class="$store.app.route==='home' ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
+                   class="block px-3 py-2 rounded-md">Home</a>
+                <a href="#upload" @click="mobileOpen=false"
+                   :class="['upload','processing','upload-history','review'].includes($store.app.route) ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
+                   class="block px-3 py-2 rounded-md">Upload</a>
+                <a href="#quiz" @click="mobileOpen=false"
+                   :class="$store.app.route==='quiz' ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
+                   class="block px-3 py-2 rounded-md">Quiz</a>
+                <a href="#shared" @click="mobileOpen=false"
+                   :class="$store.app.route==='shared' ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
+                   class="block px-3 py-2 rounded-md">Shared</a>
+                <a href="#dashboard" @click="mobileOpen=false"
+                   :class="$store.app.route==='dashboard' ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
+                   class="block px-3 py-2 rounded-md">Dashboard</a>
+                <a href="#subjects" @click="mobileOpen=false"
+                   :class="$store.app.route==='subjects' ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
+                   class="block px-3 py-2 rounded-md">Subjects</a>
                 <a href="#admin" @click="mobileOpen=false" x-show="$store.app.isAdmin"
-                   class="block px-3 py-2 rounded-md hover:bg-indigo-500 bg-indigo-700">Admin</a>
-                <a href="#profile" @click="mobileOpen=false" class="block px-3 py-2 rounded-md hover:bg-indigo-500">Profile &amp; Settings</a>
+                   :class="$store.app.route==='admin' ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
+                   class="block px-3 py-2 rounded-md">Admin</a>
+                <a href="#profile" @click="mobileOpen=false"
+                   :class="$store.app.route==='profile' ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
+                   class="block px-3 py-2 rounded-md">Profile &amp; Settings</a>
                 <button @click="$store.app.logout(); mobileOpen=false"
                         class="w-full text-left px-3 py-2 rounded-md hover:bg-indigo-500 text-red-200">Logout</button>
             </div>
