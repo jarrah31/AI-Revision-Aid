@@ -29,8 +29,9 @@ lancedb/
 *.swp
 *.swo
 
-# Tests
+# Tests & dev tooling
 tests/
+requirements-dev.txt
 
 # OS noise
 .DS_Store

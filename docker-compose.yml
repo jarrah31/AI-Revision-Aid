@@ -1,6 +1,12 @@
 services:
   web:
+    # ── Option A: use the published image (recommended for end-users) ──────────
+    # Replace <owner> with your GitHub username / org once the image is pushed.
+    # image: ghcr.io/<owner>/revisionaid:latest
+
+    # ── Option B: build locally from source (default for development) ─────────
     build: .
+
     ports:
       - "8000:8000"
     volumes:
