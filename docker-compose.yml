@@ -1,10 +1,10 @@
 services:
   web:
     # ── Option A: use the published image (recommended for end-users) ──────────
-    # image: ghcr.io/jarrah31/ai-revision-aid:latest
+    image: ghcr.io/jarrah31/ai-revision-aid:latest
 
-    # ── Option B: build locally from source (default for development) ─────────
-    build: .
+    # ── Option B: build locally from source (for development) ─────────────────
+    # build: .
 
     ports:
       - "8000:8000"
