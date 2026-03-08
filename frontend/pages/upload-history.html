@@ -1,0 +1,141 @@
+<script>
+Alpine.data('uploadHistoryPage', () => ({
+    batches: [],
+    loading: true,
+    totalCost: 0,
+
+    async init() {
+        try {
+            this.batches = await API.get('/costs/history');
+            this.totalCost = this.batches.reduce((s, b) => s + (b.cost_usd || 0), 0);
+        } catch (e) {
+            $store.app.showToast('Failed to load upload history', 'error');
+        } finally {
+            this.loading = false;
+        }
+    },
+
+    fmt(usd) {
+        return Alpine.store('app').fmtGBP(usd);
+    },
+
+    fmtTokens(n) {
+        if (!n) return '0';
+        if (n >= 1000000) return (n / 1000000).toFixed(2) + 'M';
+        if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+        return n.toString();
+    },
+
+    statusClass(s) {
+        return {
+            'completed': 'bg-green-100 text-green-700',
+            'processing': 'bg-blue-100 text-blue-700',
+            'pending':    'bg-gray-100 text-gray-600',
+            'failed':     'bg-red-100 text-red-700',
+        }[s] || 'bg-gray-100 text-gray-600';
+    }
+}));
+</script>
+
+<div x-data="uploadHistoryPage">
+    <div class="flex items-center justify-between mb-6">
+        <h1 class="text-2xl font-bold text-gray-800">Upload History</h1>
+        <a href="#upload"
+           class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition">
+            + New Upload
+        </a>
+    </div>
+
+    <!-- Summary bar -->
+    <div x-show="!loading && batches.length > 0"
+         class="bg-white rounded-xl shadow-sm border border-gray-100 p-4 mb-6 flex flex-wrap gap-6 text-sm">
+        <div>
+            <span class="text-gray-500">Total uploads:</span>
+            <span class="font-semibold text-gray-800 ml-1" x-text="batches.length"></span>
+        </div>
+        <div>
+            <span class="text-gray-500">Total questions extracted:</span>
+            <span class="font-semibold text-gray-800 ml-1"
+                  x-text="batches.reduce((s, b) => s + (b.question_count || 0), 0)"></span>
+        </div>
+        <div>
+            <span class="text-gray-500">Total AI cost:</span>
+            <span class="font-semibold text-indigo-600 ml-1" x-text="fmt(totalCost)"></span>
+        </div>
+        <div class="ml-auto">
+            <a href="#profile" @click="$store.app && null"
+               class="text-xs text-indigo-600 hover:underline">View full cost breakdown →</a>
+        </div>
+    </div>
+
+    <!-- Loading -->
+    <div x-show="loading" class="text-center py-12 text-gray-400">Loading...</div>
+
+    <!-- Empty state -->
+    <div x-show="!loading && batches.length === 0"
+         class="text-center py-16 bg-white rounded-xl shadow-sm border border-gray-100">
+        <div class="text-5xl mb-4">📂</div>
+        <p class="text-gray-500 mb-4">No uploads yet.</p>
+        <a href="#upload" class="bg-indigo-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-indigo-700 transition">
+            Upload your first PDF
+        </a>
+    </div>
+
+    <!-- Batch list -->
+    <div x-show="!loading" class="space-y-3">
+        <template x-for="b in batches" :key="b.id">
+            <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <!-- Left: info -->
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <h3 class="font-semibold text-gray-800 truncate" x-text="b.filename"></h3>
+                            <span class="text-xs px-2 py-0.5 rounded-full font-medium"
+                                  :class="statusClass(b.status)"
+                                  x-text="b.status"></span>
+                            <span x-show="b.is_shared"
+                                  class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">Shared</span>
+                        </div>
+                        <p class="text-sm text-gray-500 mt-0.5">
+                            <span x-text="b.subject_name" class="font-medium text-indigo-600"></span>
+                            &middot; Pages <span x-text="b.page_start"></span>–<span x-text="b.page_end"></span>
+                            &middot; <span x-text="b.question_count"></span> questions
+                            (<span x-text="b.approved_count"></span> approved)
+                            &middot; <span x-text="new Date(b.created_at).toLocaleDateString()"></span>
+                        </p>
+                        <p x-show="b.error_message" class="text-xs text-red-500 mt-1" x-text="b.error_message"></p>
+                    </div>
+
+                    <!-- Right: cost + actions -->
+                    <div class="flex items-center gap-4 sm:text-right">
+                        <div>
+                            <div class="text-lg font-bold"
+                                 :class="b.cost_usd > 0 ? 'text-indigo-600' : 'text-gray-400'"
+                                 x-text="fmt(b.cost_usd)"></div>
+                            <div class="text-xs text-gray-400"
+                                 x-text="b.api_calls ? b.api_calls + ' API call' + (b.api_calls !== 1 ? 's' : '') : 'No API calls'"></div>
+                            <div x-show="b.input_tokens || b.output_tokens"
+                                 class="text-xs text-gray-400"
+                                 x-text="fmtTokens(b.input_tokens || 0) + ' in / ' + fmtTokens(b.output_tokens || 0) + ' out'"></div>
+                        </div>
+                        <div class="flex flex-col gap-1.5">
+                            <a :href="'#review/' + b.id"
+                               class="text-xs text-indigo-600 hover:underline whitespace-nowrap">
+                                View Q&amp;As
+                            </a>
+                            <a :href="'/pdfs/batch_' + b.id + '.pdf'" target="_blank"
+                               class="text-xs text-gray-500 hover:underline whitespace-nowrap">
+                                Source PDF
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </template>
+    </div>
+
+    <p class="text-xs text-gray-400 mt-6 text-center">
+        Pricing: $3.00 / 1M input tokens · $15.00 / 1M output tokens (Claude Sonnet).
+        Costs shown in GBP (<span x-text="'$1 = £' + $store.app.gbpRate.toFixed(4)"></span><span x-show="$store.app.gbpRateDate">, rate date: <span x-text="$store.app.gbpRateDate"></span></span>).
+    </p>
+</div>

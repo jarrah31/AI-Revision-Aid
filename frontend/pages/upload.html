@@ -1,0 +1,136 @@
+<div x-data="{
+    subjects: [],
+    subjectId: '',
+    pageStart: 1,
+    pageEnd: 1,
+    isShared: false,
+    file: null,
+    loading: false,
+    loadingSubjects: true,
+    error: '',
+    newSubject: '',
+    showNewSubject: false,
+
+    async init() {
+        try {
+            this.subjects = await API.get('/subjects');
+            if (this.subjects.length > 0) this.subjectId = this.subjects[0].id;
+        } catch (e) {
+            $store.app.showToast('Failed to load subjects', 'error');
+        } finally {
+            this.loadingSubjects = false;
+        }
+    },
+
+    onFileChange(event) {
+        this.file = event.target.files[0];
+    },
+
+    async createSubject() {
+        if (!this.newSubject.trim()) return;
+        try {
+            const res = await API.post('/subjects', { name: this.newSubject.trim() });
+            this.subjects.push(res);
+            this.subjectId = res.id;
+            this.newSubject = '';
+            this.showNewSubject = false;
+        } catch (e) {
+            this.error = e.message;
+        }
+    },
+
+    async upload() {
+        if (!this.file || !this.subjectId) {
+            this.error = 'Please select a file and subject';
+            return;
+        }
+        this.error = '';
+        this.loading = true;
+
+        const formData = new FormData();
+        formData.append('file', this.file);
+        formData.append('subject_id', this.subjectId);
+        formData.append('page_start', this.pageStart);
+        formData.append('page_end', this.pageEnd);
+        formData.append('is_shared', this.isShared ? 1 : 0);
+
+        try {
+            const res = await API.upload('/upload', formData);
+            window.location.hash = '#processing/' + res.batch_id;
+        } catch (e) {
+            this.error = e.message;
+        } finally {
+            this.loading = false;
+        }
+    }
+}">
+    <h1 class="text-2xl font-bold text-gray-800 mb-6">Upload Knowledge Organiser</h1>
+
+    <div class="bg-white rounded-xl shadow-sm p-6 max-w-lg">
+        <div x-show="error" class="bg-red-50 text-red-600 text-sm rounded-lg p-3 mb-4" x-text="error"></div>
+
+        <form @submit.prevent="upload()" class="space-y-5">
+            <!-- PDF File -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">PDF File</label>
+                <input type="file" accept=".pdf" @change="onFileChange" required
+                       class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
+            </div>
+
+            <!-- Subject -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Subject</label>
+                <div x-show="!showNewSubject">
+                    <select x-model="subjectId" required
+                            class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                        <template x-for="s in subjects" :key="s.id">
+                            <option :value="s.id" x-text="s.name"></option>
+                        </template>
+                    </select>
+                    <button type="button" @click="showNewSubject = true"
+                            class="text-sm text-indigo-600 mt-1 hover:underline">
+                        + Create new subject
+                    </button>
+                </div>
+                <div x-show="showNewSubject" class="flex gap-2">
+                    <input x-model="newSubject" type="text" placeholder="Subject name"
+                           class="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                    <button type="button" @click="createSubject()"
+                            class="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700">Add</button>
+                    <button type="button" @click="showNewSubject = false"
+                            class="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm hover:bg-gray-200">Cancel</button>
+                </div>
+            </div>
+
+            <!-- Page Range -->
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Start Page</label>
+                    <input x-model.number="pageStart" type="number" min="1" required
+                           class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">End Page</label>
+                    <input x-model.number="pageEnd" type="number" min="1" required
+                           class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                </div>
+            </div>
+
+            <!-- Sharing toggle -->
+            <div class="flex items-center gap-3">
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" x-model="isShared" class="sr-only peer">
+                    <div class="w-11 h-6 bg-gray-200 peer-focus:ring-2 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                </label>
+                <span class="text-sm text-gray-700">Share with same year group</span>
+            </div>
+
+            <!-- Submit -->
+            <button type="submit" :disabled="loading || !file"
+                    class="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 transition">
+                <span x-show="!loading">Upload & Process</span>
+                <span x-show="loading">Uploading...</span>
+            </button>
+        </form>
+    </div>
+</div>

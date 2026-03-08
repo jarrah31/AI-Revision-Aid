@@ -1,0 +1,37 @@
+# Version control
+.git/
+.gitignore
+
+# Python artefacts
+__pycache__/
+*.py[cod]
+*.so
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# User data (mounted as a volume at runtime instead)
+data/revisionaid.db
+data/images/
+data/pdfs/
+lancedb/
+
+# Secrets
+.env
+.env.*
+
+# Dev / IDE tooling
+.claude/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Tests
+tests/
+
+# OS noise
+.DS_Store
+Thumbs.db

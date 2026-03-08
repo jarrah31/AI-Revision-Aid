@@ -1,0 +1,124 @@
+<div x-data="{
+    batches: [],
+    loading: true,
+    preview: null,
+    previewLoading: false,
+    importing: false,
+
+    async init() {
+        await this.load();
+    },
+
+    async load() {
+        this.loading = true;
+        try {
+            this.batches = await API.get('/shared');
+        } catch (e) {
+            $store.app.showToast('Failed to load shared content', 'error');
+        } finally {
+            this.loading = false;
+        }
+    },
+
+    async showPreview(batchId) {
+        this.previewLoading = true;
+        try {
+            this.preview = await API.get('/shared/' + batchId);
+        } catch (e) {
+            $store.app.showToast('Failed to load preview', 'error');
+        } finally {
+            this.previewLoading = false;
+        }
+    },
+
+    closePreview() {
+        this.preview = null;
+    },
+
+    async importBatch(batchId) {
+        if (!confirm('Import these questions into your collection?')) return;
+        this.importing = true;
+        try {
+            const res = await API.post('/shared/' + batchId + '/import');
+            $store.app.showToast(res.message, 'success');
+            this.preview = null;
+            await this.load();
+        } catch (e) {
+            $store.app.showToast(e.message, 'error');
+        } finally {
+            this.importing = false;
+        }
+    }
+}">
+    <h1 class="text-2xl font-bold text-gray-800 mb-2">Shared Content</h1>
+    <p class="text-gray-500 text-sm mb-6">
+        Question sets shared by other Year <span x-text="$store.app.user?.year_group"></span> students
+    </p>
+
+    <div x-show="loading" class="text-center py-8 text-gray-400">Loading...</div>
+
+    <div x-show="!loading && batches.length === 0" class="text-center py-12 bg-white rounded-xl shadow-sm">
+        <p class="text-gray-500">No shared content from your year group yet.</p>
+    </div>
+
+    <!-- Batch list -->
+    <div x-show="!loading && batches.length > 0" class="space-y-3">
+        <template x-for="b in batches" :key="b.id">
+            <div class="bg-white rounded-xl shadow-sm p-4 card-hover">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h3 class="font-semibold text-gray-800" x-text="b.subject_name"></h3>
+                        <p class="text-sm text-gray-500">
+                            Shared by <span x-text="b.shared_by" class="font-medium"></span>
+                            &middot; Pages <span x-text="b.page_start"></span>-<span x-text="b.page_end"></span>
+                            &middot; <span x-text="b.question_count"></span> questions
+                        </p>
+                        <p class="text-xs text-gray-400" x-text="b.filename"></p>
+                    </div>
+                    <div class="flex gap-2">
+                        <button @click="showPreview(b.id)"
+                                class="text-sm text-indigo-600 hover:underline">Preview</button>
+                        <button @click="importBatch(b.id)" :disabled="importing"
+                                class="text-sm bg-green-600 text-white px-3 py-1.5 rounded-lg hover:bg-green-700 disabled:opacity-50">
+                            Import
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </template>
+    </div>
+
+    <!-- Preview modal -->
+    <div x-show="preview || previewLoading" x-transition
+         class="fixed inset-0 bg-black/40 z-50 flex items-start justify-center p-4 pt-16 overflow-y-auto"
+         @click.self="closePreview()">
+        <div class="bg-white rounded-xl shadow-xl w-full max-w-2xl">
+            <div class="flex items-center justify-between p-4 border-b">
+                <h2 class="font-semibold text-gray-800" x-text="preview?.batch?.subject_name + ' - Preview'"></h2>
+                <button @click="closePreview()" class="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
+            </div>
+
+            <div x-show="previewLoading" class="p-8 text-center text-gray-400">Loading preview...</div>
+
+            <div x-show="preview && !previewLoading" class="p-4 max-h-[60vh] overflow-y-auto space-y-3">
+                <template x-for="q in (preview?.questions || [])" :key="q.id">
+                    <div class="border border-gray-100 rounded-lg p-3">
+                        <p class="text-sm font-medium text-gray-800" x-text="q.question_text"></p>
+                        <p class="text-sm text-gray-500 mt-1" x-text="q.answer_text"></p>
+                    </div>
+                </template>
+            </div>
+
+            <div x-show="preview" class="p-4 border-t flex justify-end gap-3">
+                <button @click="closePreview()"
+                        class="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm hover:bg-gray-200">
+                    Close
+                </button>
+                <button @click="importBatch(preview?.batch?.id)" :disabled="importing"
+                        class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 disabled:opacity-50">
+                    Import All
+                </button>
+            </div>
+        </div>
+    </div>
+</div>

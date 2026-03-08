@@ -1,0 +1,13 @@
+services:
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persist the SQLite database and all user-uploaded files
+      - ./data:/app/data
+    environment:
+      # Optional: pre-seed the Anthropic API key from a host env var or .env
+      # file. If left blank, set it via Admin → Settings after first login.
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    restart: unless-stopped

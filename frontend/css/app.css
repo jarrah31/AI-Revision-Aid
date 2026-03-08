@@ -1,0 +1,43 @@
+/* Toast animations */
+.toast-enter {
+    animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+    from { transform: translateY(-100%); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+}
+
+/* Card hover effect */
+.card-hover {
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.card-hover:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+/* Flashcard flip */
+.flip-card {
+    perspective: 1000px;
+}
+.flip-card-inner {
+    transition: transform 0.5s;
+    transform-style: preserve-3d;
+}
+.flip-card-inner.flipped {
+    transform: rotateY(180deg);
+}
+.flip-card-front, .flip-card-back {
+    backface-visibility: hidden;
+}
+.flip-card-back {
+    transform: rotateY(180deg);
+}
+
+/* Mobile-friendly tap targets */
+@media (max-width: 640px) {
+    button, a.btn {
+        min-height: 44px;
+    }
+}

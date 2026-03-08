@@ -1,0 +1,518 @@
+<script>
+Alpine.data('adminPage', () => ({
+    tab: 'users',
+    // Users
+    users: [],
+    loadingUsers: true,
+    editingUser: null,
+    userForm: { display_name: '', year_group: 9, is_admin: 0 },
+
+    // Content
+    batches: [],
+    loadingBatches: true,
+    batchQuestions: null,
+    batchDetail: null,
+    editingQuestion: null,
+    questionForm: { question_text: '', answer_text: '' },
+
+    // Settings
+    dbSettings: {},
+    loadingSettings: false,
+    settingForms: { anthropic_api_key: '', jwt_secret: '' },
+    showApiKey: false,
+    showJwtSecret: false,
+
+    // Stats
+    stats: null,
+
+    async init() {
+        await this.loadUsers();
+        this.loadStats();
+    },
+
+    // ── Users ──
+    async loadUsers() {
+        this.loadingUsers = true;
+        try {
+            this.users = await API.get('/admin/users');
+        } catch (e) {
+            $store.app.showToast('Failed to load users', 'error');
+        } finally {
+            this.loadingUsers = false;
+        }
+    },
+
+    openEditUser(u) {
+        this.editingUser = u.id;
+        this.userForm = { display_name: u.display_name, year_group: u.year_group, is_admin: u.is_admin ? 1 : 0 };
+    },
+
+    async saveUser(id) {
+        try {
+            await API.put('/admin/users/' + id, this.userForm);
+            $store.app.showToast('User updated', 'success');
+            this.editingUser = null;
+            await this.loadUsers();
+        } catch (e) {
+            $store.app.showToast(e.message, 'error');
+        }
+    },
+
+    async deleteUser(id, name) {
+        if (!confirm('Delete user "' + name + '"? This deletes all their data.')) return;
+        try {
+            await API.del('/admin/users/' + id);
+            $store.app.showToast('User deleted', 'success');
+            await this.loadUsers();
+        } catch (e) {
+            $store.app.showToast(e.message, 'error');
+        }
+    },
+
+    // ── Content ──
+    async loadBatches() {
+        this.loadingBatches = true;
+        try {
+            this.batches = await API.get('/admin/batches');
+        } catch (e) {
+            $store.app.showToast('Failed to load batches', 'error');
+        } finally {
+            this.loadingBatches = false;
+        }
+    },
+
+    async viewBatch(id) {
+        try {
+            const res = await API.get('/admin/batches/' + id + '/questions');
+            this.batchDetail = res.batch;
+            this.batchQuestions = res.questions;
+        } catch (e) {
+            $store.app.showToast('Failed to load batch', 'error');
+        }
+    },
+
+    closeBatchView() {
+        this.batchDetail = null;
+        this.batchQuestions = null;
+        this.editingQuestion = null;
+    },
+
+    openEditQuestion(q) {
+        this.editingQuestion = q.id;
+        this.questionForm = { question_text: q.question_text, answer_text: q.answer_text };
+    },
+
+    async saveQuestion(id) {
+        try {
+            await API.put('/admin/questions/' + id, this.questionForm);
+            const q = this.batchQuestions.find(q => q.id === id);
+            if (q) { q.question_text = this.questionForm.question_text; q.answer_text = this.questionForm.answer_text; }
+            this.editingQuestion = null;
+            $store.app.showToast('Question updated', 'success');
+        } catch (e) {
+            $store.app.showToast(e.message, 'error');
+        }
+    },
+
+    async deleteQuestion(id) {
+        if (!confirm('Delete this question?')) return;
+        try {
+            await API.del('/admin/questions/' + id);
+            this.batchQuestions = this.batchQuestions.filter(q => q.id !== id);
+            $store.app.showToast('Question deleted', 'success');
+        } catch (e) {
+            $store.app.showToast(e.message, 'error');
+        }
+    },
+
+    async deleteBatch(id) {
+        if (!confirm('Delete this entire batch and all its questions?')) return;
+        try {
+            await API.del('/admin/batches/' + id);
+            $store.app.showToast('Batch deleted', 'success');
+            this.closeBatchView();
+            await this.loadBatches();
+        } catch (e) {
+            $store.app.showToast(e.message, 'error');
+        }
+    },
+
+    async toggleSharing(id) {
+        try {
+            const res = await API.put('/admin/batches/' + id + '/sharing');
+            const b = this.batches.find(b => b.id === id);
+            if (b) b.is_shared = res.is_shared ? 1 : 0;
+            $store.app.showToast(res.is_shared ? 'Now shared' : 'Now private', 'success');
+        } catch (e) {
+            $store.app.showToast(e.message, 'error');
+        }
+    },
+
+    async reprocessBatch(id, mode) {
+        if (!confirm('Re-process this batch? Mode: ' + mode)) return;
+        try {
+            await API.post('/admin/batches/' + id + '/reprocess', { mode });
+            $store.app.showToast('Re-processing started', 'success');
+            this.closeBatchView();
+            await this.loadBatches();
+        } catch (e) {
+            $store.app.showToast(e.message, 'error');
+        }
+    },
+
+    // ── Stats ──
+    async loadStats() {
+        try {
+            this.stats = await API.get('/admin/stats');
+        } catch (e) {}
+    },
+
+    // ── Settings ──
+    async loadSettings() {
+        this.loadingSettings = true;
+        try {
+            this.dbSettings = await API.get('/admin/settings');
+            this.settingForms.anthropic_api_key = this.dbSettings.anthropic_api_key?.value || '';
+            this.settingForms.jwt_secret = this.dbSettings.jwt_secret?.value || '';
+        } catch (e) {
+            $store.app.showToast('Failed to load settings', 'error');
+        } finally {
+            this.loadingSettings = false;
+        }
+    },
+
+    async saveSetting(key) {
+        const val = this.settingForms[key];
+        if (!val || !val.trim()) {
+            $store.app.showToast('Value cannot be empty', 'error');
+            return;
+        }
+        try {
+            await API.put('/admin/settings/' + key, { value: val.trim() });
+            $store.app.showToast('Setting saved', 'success');
+            // Changing JWT secret invalidates all existing tokens → log out
+            if (key === 'jwt_secret') {
+                $store.app.showToast('JWT secret changed — you will be logged out now.', 'error');
+                setTimeout(() => {
+                    localStorage.removeItem('token');
+                    window.location.hash = '#login';
+                    window.location.reload();
+                }, 2500);
+            }
+        } catch (e) {
+            $store.app.showToast(e.message || 'Save failed', 'error');
+        }
+    },
+
+    generateJwtSecret() {
+        const arr = new Uint8Array(32);
+        crypto.getRandomValues(arr);
+        this.settingForms.jwt_secret = Array.from(arr)
+            .map(b => b.toString(16).padStart(2, '0'))
+            .join('');
+        this.showJwtSecret = true;
+    },
+
+    switchTab(t) {
+        this.tab = t;
+        if (t === 'content' && this.batches.length === 0) this.loadBatches();
+        if (t === 'settings' && Object.keys(this.dbSettings).length === 0) this.loadSettings();
+    },
+
+    fmt(usd) {
+        return Alpine.store('app').fmtGBP(usd, true);
+    }
+}));
+</script>
+
+<div x-data="adminPage">
+    <h1 class="text-2xl font-bold text-gray-800 mb-4">Admin Panel</h1>
+
+    <!-- Stats banner -->
+    <div x-show="stats" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3 mb-6">
+        <div class="bg-white rounded-lg shadow-sm p-3 text-center">
+            <div class="text-xl font-bold text-indigo-600" x-text="stats?.total_users || 0"></div>
+            <div class="text-xs text-gray-500">Users</div>
+        </div>
+        <div class="bg-white rounded-lg shadow-sm p-3 text-center">
+            <div class="text-xl font-bold text-indigo-600" x-text="stats?.total_questions || 0"></div>
+            <div class="text-xs text-gray-500">Questions</div>
+        </div>
+        <div class="bg-white rounded-lg shadow-sm p-3 text-center">
+            <div class="text-xl font-bold text-green-600" x-text="stats?.approved_questions || 0"></div>
+            <div class="text-xs text-gray-500">Approved</div>
+        </div>
+        <div class="bg-white rounded-lg shadow-sm p-3 text-center">
+            <div class="text-xl font-bold text-indigo-600" x-text="stats?.total_batches || 0"></div>
+            <div class="text-xs text-gray-500">Batches</div>
+        </div>
+        <div class="bg-white rounded-lg shadow-sm p-3 text-center">
+            <div class="text-xl font-bold text-indigo-600" x-text="stats?.total_quiz_sessions || 0"></div>
+            <div class="text-xs text-gray-500">Quizzes</div>
+        </div>
+        <div class="bg-white rounded-lg shadow-sm p-3 text-center">
+            <div class="text-xl font-bold text-indigo-600" x-text="stats?.total_quiz_answers || 0"></div>
+            <div class="text-xs text-gray-500">Answers</div>
+        </div>
+        <div class="bg-white rounded-lg shadow-sm p-3 text-center">
+            <div class="text-xl font-bold text-green-600" x-text="stats?.total_cost_usd != null ? $store.app.fmtGBP(stats.total_cost_usd) : '—'"></div>
+            <div class="text-xs text-gray-500">AI Spend</div>
+        </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="flex gap-2 mb-4">
+        <button @click="switchTab('users')"
+                :class="tab === 'users' ? 'bg-indigo-600 text-white' : 'bg-white text-gray-700'"
+                class="px-4 py-2 rounded-lg text-sm font-medium shadow-sm transition">Users</button>
+        <button @click="switchTab('content')"
+                :class="tab === 'content' ? 'bg-indigo-600 text-white' : 'bg-white text-gray-700'"
+                class="px-4 py-2 rounded-lg text-sm font-medium shadow-sm transition">Content</button>
+        <button @click="switchTab('settings')"
+                :class="tab === 'settings' ? 'bg-indigo-600 text-white' : 'bg-white text-gray-700'"
+                class="px-4 py-2 rounded-lg text-sm font-medium shadow-sm transition">Settings</button>
+    </div>
+
+    <!-- USERS TAB -->
+    <div x-show="tab === 'users'">
+        <div x-show="loadingUsers" class="text-center py-8 text-gray-400">Loading...</div>
+        <div x-show="!loadingUsers" class="space-y-3">
+            <template x-for="u in users" :key="u.id">
+                <div class="bg-white rounded-xl shadow-sm p-4">
+                    <div x-show="editingUser !== u.id" class="flex items-center justify-between">
+                        <div>
+                            <div class="flex items-center gap-2">
+                                <h3 class="font-semibold text-gray-800" x-text="u.display_name"></h3>
+                                <span x-show="u.is_admin" class="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full">Admin</span>
+                            </div>
+                            <p class="text-sm text-gray-500">
+                                @<span x-text="u.username"></span> &middot;
+                                Year <span x-text="u.year_group"></span> &middot;
+                                <span x-text="u.question_count"></span> questions
+                            </p>
+                            <p class="text-xs text-gray-400">
+                                Last active: <span x-text="u.last_active || 'Never'"></span>
+                                &middot; AI spend: <span class="font-medium text-indigo-500" x-text="fmt(u.total_cost_usd)"></span>
+                            </p>
+                        </div>
+                        <div class="flex gap-2">
+                            <button @click="openEditUser(u)" class="text-xs text-indigo-600 hover:underline">Edit</button>
+                            <button @click="deleteUser(u.id, u.display_name)"
+                                    class="text-xs text-red-600 hover:underline"
+                                    x-show="u.id !== $store.app.user?.id">Delete</button>
+                        </div>
+                    </div>
+                    <!-- Inline edit -->
+                    <div x-show="editingUser === u.id" class="space-y-3">
+                        <div class="grid grid-cols-3 gap-3">
+                            <div>
+                                <label class="text-xs text-gray-500">Display Name</label>
+                                <input x-model="userForm.display_name" type="text"
+                                       class="w-full px-2 py-1.5 border rounded-lg text-sm">
+                            </div>
+                            <div>
+                                <label class="text-xs text-gray-500">Year</label>
+                                <select x-model.number="userForm.year_group" class="w-full px-2 py-1.5 border rounded-lg text-sm">
+                                    <template x-for="y in [7,8,9,10,11,12,13]"><option :value="y" x-text="'Year ' + y"></option></template>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="text-xs text-gray-500">Admin</label>
+                                <select x-model.number="userForm.is_admin" class="w-full px-2 py-1.5 border rounded-lg text-sm">
+                                    <option value="0">No</option><option value="1">Yes</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="flex gap-2">
+                            <button @click="saveUser(u.id)" class="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-sm">Save</button>
+                            <button @click="editingUser = null" class="px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg text-sm">Cancel</button>
+                        </div>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </div>
+
+    <!-- SETTINGS TAB -->
+    <div x-show="tab === 'settings'">
+        <div x-show="loadingSettings" class="text-center py-8 text-gray-400">Loading…</div>
+        <div x-show="!loadingSettings" class="space-y-4">
+
+            <!-- Info banner -->
+            <div class="bg-blue-50 border border-blue-200 rounded-xl p-3 text-sm text-blue-700">
+                These settings are stored in the database and take effect immediately — no
+                <code class="font-mono bg-blue-100 px-1 rounded">.env</code> file required.
+                Existing <code class="font-mono bg-blue-100 px-1 rounded">.env</code> values are
+                automatically seeded here on first startup.
+            </div>
+
+            <!-- Anthropic API Key -->
+            <div class="bg-white rounded-xl shadow-sm p-4">
+                <h3 class="font-semibold text-gray-800 mb-0.5">Anthropic API Key</h3>
+                <p class="text-xs text-gray-500 mb-3">
+                    Used for AI question extraction, MCQ generation, and answer judging.
+                    <span x-show="dbSettings.anthropic_api_key?.updated_at" class="text-gray-400">
+                        Last updated: <span x-text="dbSettings.anthropic_api_key?.updated_at"></span>
+                    </span>
+                </p>
+                <div class="flex gap-2">
+                    <input x-model="settingForms.anthropic_api_key"
+                           :type="showApiKey ? 'text' : 'password'"
+                           class="flex-1 px-3 py-2 border rounded-lg text-sm font-mono"
+                           placeholder="sk-ant-api03-…"
+                           autocomplete="off" spellcheck="false">
+                    <button @click="showApiKey = !showApiKey"
+                            class="px-3 py-2 bg-gray-100 rounded-lg text-sm text-gray-600 hover:bg-gray-200 transition"
+                            x-text="showApiKey ? 'Hide' : 'Show'"></button>
+                </div>
+                <div class="flex items-center gap-3 mt-3">
+                    <button @click="saveSetting('anthropic_api_key')"
+                            class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700 transition">
+                        Save API Key
+                    </button>
+                    <span x-show="dbSettings.anthropic_api_key?.masked"
+                          class="text-xs text-gray-400 font-mono"
+                          x-text="'Current: ' + (dbSettings.anthropic_api_key?.masked || '(not set)')"></span>
+                </div>
+            </div>
+
+            <!-- JWT Secret -->
+            <div class="bg-white rounded-xl shadow-sm p-4">
+                <h3 class="font-semibold text-gray-800 mb-0.5">JWT Secret</h3>
+                <div class="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3">
+                    <p class="text-xs text-amber-800">
+                        ⚠️ <strong>Changing this logs out all users immediately</strong>, including you.
+                        A secure random value is auto-generated on first startup — you don't need to
+                        change this unless you want to invalidate all existing sessions.
+                    </p>
+                </div>
+                <p class="text-xs text-gray-500 mb-3">
+                    <span x-show="dbSettings.jwt_secret?.updated_at" class="text-gray-400">
+                        Last updated: <span x-text="dbSettings.jwt_secret?.updated_at"></span>
+                    </span>
+                </p>
+                <div class="flex gap-2">
+                    <input x-model="settingForms.jwt_secret"
+                           :type="showJwtSecret ? 'text' : 'password'"
+                           class="flex-1 px-3 py-2 border rounded-lg text-sm font-mono"
+                           placeholder="••••••••••••••••••••••••••••••••"
+                           autocomplete="off" spellcheck="false">
+                    <button @click="showJwtSecret = !showJwtSecret"
+                            class="px-3 py-2 bg-gray-100 rounded-lg text-sm text-gray-600 hover:bg-gray-200 transition"
+                            x-text="showJwtSecret ? 'Hide' : 'Show'"></button>
+                    <button @click="generateJwtSecret()"
+                            class="px-3 py-2 bg-gray-100 rounded-lg text-sm text-gray-600 hover:bg-gray-200 transition"
+                            title="Generate a secure random secret">
+                        Generate
+                    </button>
+                </div>
+                <div class="mt-3">
+                    <button @click="saveSetting('jwt_secret')"
+                            class="px-4 py-2 bg-red-600 text-white rounded-lg text-sm hover:bg-red-700 transition">
+                        Save Secret &amp; Log Everyone Out
+                    </button>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- CONTENT TAB -->
+    <div x-show="tab === 'content'">
+        <div x-show="loadingBatches" class="text-center py-8 text-gray-400">Loading...</div>
+
+        <!-- Batch list -->
+        <div x-show="!loadingBatches && !batchDetail" class="space-y-3">
+            <template x-for="b in batches" :key="b.id">
+                <div class="bg-white rounded-xl shadow-sm p-4">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <h3 class="font-semibold text-gray-800">
+                                <span x-text="b.subject_name"></span>
+                                <span class="text-xs font-normal text-gray-400 ml-1" x-text="'(Batch #' + b.id + ')'"></span>
+                            </h3>
+                            <p class="text-sm text-gray-500">
+                                By <span x-text="b.owner_name"></span> (@<span x-text="b.owner_username"></span>)
+                                &middot; Pages <span x-text="b.page_start"></span>-<span x-text="b.page_end"></span>
+                                &middot; <span x-text="b.question_count"></span> questions
+                                &middot; <span x-text="b.status"></span>
+                            </p>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs px-2 py-0.5 rounded-full"
+                                  :class="b.is_shared ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'"
+                                  x-text="b.is_shared ? 'Shared' : 'Private'"></span>
+                            <button @click="toggleSharing(b.id)" class="text-xs text-indigo-600 hover:underline"
+                                    x-text="b.is_shared ? 'Make Private' : 'Make Shared'"></button>
+                            <button @click="viewBatch(b.id)" class="text-xs text-indigo-600 hover:underline">View</button>
+                            <button @click="deleteBatch(b.id)" class="text-xs text-red-600 hover:underline">Delete</button>
+                        </div>
+                    </div>
+                </div>
+            </template>
+        </div>
+
+        <!-- Batch detail view with PDF page + questions -->
+        <div x-show="batchDetail">
+            <div class="flex items-center justify-between mb-4">
+                <div>
+                    <h2 class="text-lg font-semibold text-gray-800" x-text="batchDetail?.subject_name + ' - ' + batchDetail?.filename"></h2>
+                    <p class="text-sm text-gray-500">Owner: <span x-text="batchDetail?.owner_name"></span></p>
+                </div>
+                <div class="flex gap-2">
+                    <button @click="reprocessBatch(batchDetail?.id, 'replace')"
+                            class="text-xs bg-yellow-500 text-white px-3 py-1.5 rounded-lg hover:bg-yellow-600">
+                        Re-process (Replace)
+                    </button>
+                    <button @click="reprocessBatch(batchDetail?.id, 'append')"
+                            class="text-xs bg-blue-500 text-white px-3 py-1.5 rounded-lg hover:bg-blue-600">
+                        Re-process (Append)
+                    </button>
+                    <button @click="closeBatchView()"
+                            class="text-xs bg-gray-100 text-gray-700 px-3 py-1.5 rounded-lg hover:bg-gray-200">
+                        Back
+                    </button>
+                </div>
+            </div>
+
+            <div class="flex flex-col lg:flex-row gap-4">
+                <!-- Questions -->
+                <div class="lg:w-1/2 space-y-3">
+                    <template x-for="q in (batchQuestions || [])" :key="q.id">
+                        <div class="bg-white rounded-xl shadow-sm p-4 border-l-4"
+                             :class="q.approved ? 'border-green-500' : 'border-yellow-400'">
+                            <div x-show="editingQuestion !== q.id">
+                                <p class="font-medium text-gray-800 text-sm" x-text="q.question_text"></p>
+                                <p class="text-gray-600 text-sm mt-1" x-text="q.answer_text"></p>
+                                <img x-show="q.image_filename" :src="'/images/' + q.image_filename"
+                                     class="mt-2 max-h-24 rounded border" @error="$el.style.display='none'">
+                                <div class="flex gap-2 mt-2">
+                                    <span class="text-xs text-gray-400">Page <span x-text="q.page_number"></span></span>
+                                    <div class="flex-1"></div>
+                                    <button @click="openEditQuestion(q)" class="text-xs text-indigo-600 hover:underline">Edit</button>
+                                    <button @click="deleteQuestion(q.id)" class="text-xs text-red-600 hover:underline">Delete</button>
+                                </div>
+                            </div>
+                            <div x-show="editingQuestion === q.id" class="space-y-2">
+                                <textarea x-model="questionForm.question_text" rows="2" class="w-full px-2 py-1.5 border rounded-lg text-sm"></textarea>
+                                <textarea x-model="questionForm.answer_text" rows="2" class="w-full px-2 py-1.5 border rounded-lg text-sm"></textarea>
+                                <div class="flex gap-2">
+                                    <button @click="saveQuestion(q.id)" class="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs">Save</button>
+                                    <button @click="editingQuestion = null" class="px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg text-xs">Cancel</button>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+                <!-- PDF page images -->
+                <div class="lg:w-1/2 sticky top-16 self-start">
+                    <div class="bg-white rounded-xl shadow-sm p-2">
+                        <img :src="'/images/batch_' + batchDetail?.id + '/page_' + (batchDetail?.page_start || 1) + '_full.png'"
+                             class="w-full rounded-lg border border-gray-200"
+                             @error="$el.alt='PDF page image not available'; $el.style.opacity='0.3'">
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

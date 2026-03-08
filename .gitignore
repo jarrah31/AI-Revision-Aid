@@ -1,0 +1,68 @@
+# ── Secrets & Environment ─────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example          # allow a checked-in example template if you add one
+
+# ── User Data ─────────────────────────────────────────────────────────────────
+# SQLite database (contains user accounts, questions, quiz history)
+data/revisionaid.db
+
+# Uploaded PDFs and extracted images
+data/pdfs/*
+data/images/*
+
+# Keep the empty directory stubs so the app can start without manual setup
+!data/pdfs/.gitkeep
+!data/images/.gitkeep
+
+# LanceDB vector store (runtime data)
+lancedb/
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Package build artefacts
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ── Claude Code ───────────────────────────────────────────────────────────────
+# Keep .claude/launch.json — it defines how to start the dev server (useful for
+# any developer opening this project in Claude Code).
+.claude/settings.local.json
+.claude/plans/
+
+# ── IDE & Editor ──────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+logs/

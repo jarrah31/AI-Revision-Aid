@@ -1,0 +1,118 @@
+<div x-data="{
+    summary: null,
+    history: [],
+    loading: true,
+
+    async init() {
+        try {
+            const [sum, hist] = await Promise.all([
+                API.get('/dashboard/summary'),
+                API.get('/dashboard/history'),
+            ]);
+            this.summary = sum;
+            this.history = hist;
+        } catch (e) {
+            $store.app.showToast('Failed to load dashboard', 'error');
+        } finally {
+            this.loading = false;
+        }
+    },
+
+    sessionAccuracy(s) {
+        const total = s.correct_count + s.incorrect_count;
+        return total > 0 ? Math.round(s.correct_count / total * 100) : 0;
+    }
+}">
+    <h1 class="text-2xl font-bold text-gray-800 mb-6">Dashboard</h1>
+
+    <div x-show="loading" class="text-center py-8 text-gray-400">Loading...</div>
+
+    <div x-show="!loading">
+        <!-- Overview cards -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+            <div class="bg-white rounded-xl shadow-sm p-4 text-center">
+                <div class="text-3xl font-bold text-indigo-600" x-text="summary?.total_questions || 0"></div>
+                <div class="text-xs text-gray-500 mt-1">Questions</div>
+            </div>
+            <div class="bg-white rounded-xl shadow-sm p-4 text-center">
+                <div class="text-3xl font-bold" x-text="(summary?.accuracy || 0) + '%'"
+                     :class="(summary?.accuracy || 0) >= 70 ? 'text-green-600' : 'text-yellow-600'"></div>
+                <div class="text-xs text-gray-500 mt-1">Accuracy</div>
+            </div>
+            <div class="bg-white rounded-xl shadow-sm p-4 text-center">
+                <div class="text-3xl font-bold text-orange-500" x-text="summary?.due_today || 0"></div>
+                <div class="text-xs text-gray-500 mt-1">Due Today</div>
+            </div>
+            <div class="bg-white rounded-xl shadow-sm p-4 text-center">
+                <div class="text-3xl font-bold text-indigo-600" x-text="summary?.total_sessions || 0"></div>
+                <div class="text-xs text-gray-500 mt-1">Quizzes Taken</div>
+            </div>
+        </div>
+
+        <!-- Due today call-to-action -->
+        <div x-show="summary?.due_today > 0"
+             class="bg-orange-50 border border-orange-200 rounded-xl p-4 mb-6 flex items-center justify-between">
+            <div>
+                <p class="font-medium text-orange-800">
+                    You have <span x-text="summary?.due_today"></span> cards due for review!
+                </p>
+                <p class="text-sm text-orange-600">Keep your streak going.</p>
+            </div>
+            <a href="#quiz" class="bg-orange-500 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-orange-600 transition">
+                Start Review
+            </a>
+        </div>
+
+        <!-- Subject breakdown -->
+        <h2 class="text-lg font-semibold text-gray-700 mb-3">By Subject</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
+            <template x-for="s in (summary?.subjects || [])" :key="s.id">
+                <div class="bg-white rounded-xl shadow-sm p-4 border-l-4"
+                     :style="'border-color: ' + (s.color || '#6366f1')">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-2">
+                            <span x-show="s.icon" x-text="s.icon"></span>
+                            <h3 class="font-semibold text-gray-800" x-text="s.name"></h3>
+                        </div>
+                        <a :href="'#quiz/' + s.id" class="text-xs text-indigo-600 hover:underline">Quiz &rarr;</a>
+                    </div>
+                    <div class="flex gap-4 mt-2 text-sm text-gray-500">
+                        <span><span x-text="s.question_count" class="font-medium"></span> questions</span>
+                        <span x-show="s.due_count > 0" class="text-orange-600 font-medium">
+                            <span x-text="s.due_count"></span> due
+                        </span>
+                    </div>
+                </div>
+            </template>
+        </div>
+
+        <!-- Recent quiz history -->
+        <h2 class="text-lg font-semibold text-gray-700 mb-3">Recent Quizzes</h2>
+        <div x-show="history.length === 0" class="text-center py-8 bg-white rounded-xl shadow-sm text-gray-400">
+            No quizzes taken yet. <a href="#quiz" class="text-indigo-600 hover:underline">Start one!</a>
+        </div>
+        <div x-show="history.length > 0" class="space-y-2">
+            <template x-for="s in history" :key="s.id">
+                <div class="bg-white rounded-xl shadow-sm p-4 flex items-center justify-between">
+                    <div>
+                        <p class="font-medium text-gray-800 text-sm" x-text="s.subject_name || 'All Subjects'"></p>
+                        <p class="text-xs text-gray-400" x-text="new Date(s.started_at).toLocaleDateString('en-GB', {day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})"></p>
+                    </div>
+                    <div class="flex items-center gap-4">
+                        <span class="text-sm">
+                            <span class="text-green-600 font-medium" x-text="s.correct_count"></span>/<span class="text-gray-500" x-text="s.total_questions"></span>
+                        </span>
+                        <div class="w-16 bg-gray-200 rounded-full h-2">
+                            <div class="h-2 rounded-full transition-all"
+                                 :class="sessionAccuracy(s) >= 70 ? 'bg-green-500' : 'bg-yellow-500'"
+                                 :style="'width: ' + sessionAccuracy(s) + '%'"></div>
+                        </div>
+                        <span class="text-sm font-medium w-10 text-right"
+                              :class="sessionAccuracy(s) >= 70 ? 'text-green-600' : 'text-yellow-600'"
+                              x-text="sessionAccuracy(s) + '%'"></span>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </div>
+</div>

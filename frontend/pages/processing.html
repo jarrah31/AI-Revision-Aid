@@ -1,0 +1,105 @@
+<div x-data="{
+    batchId: null,
+    status: null,
+    polling: null,
+
+    async init() {
+        this.batchId = window._routeParams?.[0];
+        if (!this.batchId) {
+            window.location.hash = '#upload';
+            return;
+        }
+        await this.poll();
+        this.polling = setInterval(() => this.poll(), 2000);
+    },
+
+    async poll() {
+        try {
+            this.status = await API.get('/upload/' + this.batchId + '/status');
+            if (this.status.status === 'completed' || this.status.status === 'failed') {
+                clearInterval(this.polling);
+                if (this.status.status === 'completed') {
+                    $store.app.showToast('Processing complete!', 'success');
+                }
+            }
+        } catch (e) {
+            clearInterval(this.polling);
+            $store.app.showToast('Failed to check status', 'error');
+        }
+    },
+
+    get progressPct() {
+        if (!this.status || !this.status.total_pages) return 0;
+        return Math.round((this.status.processed_pages / this.status.total_pages) * 100);
+    },
+
+    destroy() {
+        if (this.polling) clearInterval(this.polling);
+    }
+}">
+    <h1 class="text-2xl font-bold text-gray-800 mb-6">Processing PDF</h1>
+
+    <div class="bg-white rounded-xl shadow-sm p-8 max-w-lg">
+        <div x-show="!status" class="text-center text-gray-400">Loading...</div>
+
+        <div x-show="status">
+            <!-- Filename -->
+            <p class="text-gray-600 mb-4" x-text="status?.filename"></p>
+
+            <!-- Progress bar -->
+            <div class="mb-4">
+                <div class="flex justify-between text-sm text-gray-600 mb-1">
+                    <span>Processing pages...</span>
+                    <span x-text="(status?.processed_pages || 0) + ' / ' + (status?.total_pages || 0)"></span>
+                </div>
+                <div class="w-full bg-gray-200 rounded-full h-3">
+                    <div class="bg-indigo-600 h-3 rounded-full transition-all duration-500"
+                         :style="'width: ' + progressPct + '%'"></div>
+                </div>
+            </div>
+
+            <!-- Status messages -->
+            <div x-show="status?.status === 'processing'" class="flex items-center gap-2 text-indigo-600">
+                <svg class="animate-spin h-5 w-5" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <span class="text-sm">AI is analysing your knowledge organiser...</span>
+            </div>
+
+            <div x-show="status?.status === 'completed'" class="space-y-4">
+                <div class="flex items-center gap-2 text-green-600">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                    </svg>
+                    <span class="text-sm font-medium">Complete!</span>
+                </div>
+                <p class="text-sm text-gray-600">
+                    <span x-text="status?.question_count || 0"></span> questions generated.
+                </p>
+                <a :href="'#review/' + batchId"
+                   class="inline-block bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition">
+                    Review Questions
+                </a>
+            </div>
+
+            <div x-show="status?.status === 'failed'" class="space-y-3">
+                <div class="flex items-center gap-2 text-red-600">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                    <span class="text-sm font-medium">Processing failed</span>
+                </div>
+                <p x-show="status?.error_message" class="text-sm text-red-500" x-text="status?.error_message"></p>
+                <a href="#upload" class="inline-block text-sm text-indigo-600 hover:underline">Try again</a>
+            </div>
+
+            <!-- Errors during processing (partial) -->
+            <div x-show="status?.status === 'completed' && status?.error_message"
+                 class="mt-4 bg-yellow-50 text-yellow-700 text-sm rounded-lg p-3">
+                <p class="font-medium">Some pages had issues:</p>
+                <p x-text="status?.error_message"></p>
+            </div>
+        </div>
+    </div>
+</div>

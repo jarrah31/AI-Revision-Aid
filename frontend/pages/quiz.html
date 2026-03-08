@@ -1,0 +1,439 @@
+<div x-data="{
+    // Setup state
+    phase: 'setup',
+    subjects: [],
+    subjectId: '',
+    categoryId: null,
+    subjectCategories: {},   // subject_id → [categories]
+    count: 20,
+    mode: 'mixed',
+    loadingSetup: true,
+    startingQuiz: false,
+
+    // Quiz state
+    sessionId: null,
+    questions: [],
+    currentIndex: 0,
+    showAnswer: false,
+    typedAnswer: '',
+    selectedOption: null,
+    result: null,
+    submitting: false,
+    startTime: null,
+    selectedQuality: null,
+
+    // Summary
+    summary: null,
+
+    async init() {
+        // Check if subject passed in URL
+        const subjectParam = window._routeParams?.[0];
+        if (subjectParam) this.subjectId = parseInt(subjectParam);
+
+        try {
+            this.subjects = await API.get('/subjects');
+            if (!this.subjectId && this.subjects.length > 0) {
+                this.subjectId = '';
+            }
+        } catch (e) {
+            $store.app.showToast('Failed to load subjects', 'error');
+        } finally {
+            this.loadingSetup = false;
+        }
+    },
+
+    async selectSubject(id) {
+        this.subjectId = id === null ? '' : id;
+        this.categoryId = null;
+        if (id && !this.subjectCategories[id]) {
+            try {
+                const cats = await API.get('/categories?subject_id=' + id);
+                this.subjectCategories = { ...this.subjectCategories, [id]: cats };
+            } catch (e) { /* non-critical */ }
+        }
+    },
+
+    get currentQuestion() {
+        return this.questions[this.currentIndex] || null;
+    },
+
+    get currentFormat() {
+        if (this.mode !== 'mixed') return this.mode;
+        const q = this.currentQuestion;
+        if (!q) return 'flashcard';
+        // Cycle through formats, prefer MCQ if options exist
+        if (q.mcq_options && q.mcq_options.length >= 4) {
+            const formats = ['flashcard', 'mcq', 'typed'];
+            return formats[this.currentIndex % 3];
+        }
+        return ['flashcard', 'typed'][this.currentIndex % 2];
+    },
+
+    get progressPct() {
+        if (!this.questions.length) return 0;
+        return Math.round((this.currentIndex / this.questions.length) * 100);
+    },
+
+    async startQuiz() {
+        this.startingQuiz = true;
+        try {
+            const res = await API.post('/quiz/start', {
+                subject_id: this.subjectId || null,
+                category_id: this.categoryId || null,
+                count: this.count,
+                mode: this.mode,
+            });
+            if (!res.session_id) {
+                $store.app.showToast(res.message || 'No cards due for review', 'info');
+                return;
+            }
+            this.sessionId = res.session_id;
+            this.questions = res.questions;
+            this.currentIndex = 0;
+            this.phase = 'quiz';
+            this.resetCard();
+        } catch (e) {
+            $store.app.showToast(e.message, 'error');
+        } finally {
+            this.startingQuiz = false;
+        }
+    },
+
+    resetCard() {
+        this.showAnswer = false;
+        this.typedAnswer = '';
+        this.selectedOption = null;
+        this.result = null;
+        this.selectedQuality = null;
+        this.startTime = Date.now();
+    },
+
+    async revealFlashcard() {
+        this.showAnswer = true;
+    },
+
+    async rateAndNext(quality) {
+        // Record the SRS rating without showing a correct/incorrect result
+        const elapsed = Date.now() - this.startTime;
+        this.submitting = true;
+        try {
+            await API.post('/quiz/' + this.sessionId + '/answer', {
+                question_id: this.currentQuestion.id,
+                quiz_format: 'flashcard',
+                student_answer: null,
+                quality_rating: quality,
+                time_taken_ms: elapsed,
+            });
+        } catch (e) {
+            // Advance even if save fails
+        } finally {
+            this.submitting = false;
+        }
+        this.nextQuestion();
+    },
+
+    tryAgain() {
+        this.result = null;
+        this.selectedOption = null;
+        this.typedAnswer = '';
+        this.startTime = Date.now();
+    },
+
+    async submitMCQ() {
+        if (!this.selectedOption) return;
+        await this.submitAnswer('mcq', this.selectedOption, null);
+    },
+
+    async submitTyped() {
+        if (!this.typedAnswer.trim()) return;
+        await this.submitAnswer('typed', this.typedAnswer, null);
+    },
+
+    async submitAnswer(format, answer, quality) {
+        this.submitting = true;
+        const elapsed = Date.now() - this.startTime;
+        try {
+            this.result = await API.post('/quiz/' + this.sessionId + '/answer', {
+                question_id: this.currentQuestion.id,
+                quiz_format: format,
+                student_answer: answer,
+                quality_rating: quality,
+                time_taken_ms: elapsed,
+            });
+        } catch (e) {
+            $store.app.showToast(e.message, 'error');
+        } finally {
+            this.submitting = false;
+        }
+    },
+
+    nextQuestion() {
+        this.currentIndex++;
+        if (this.currentIndex >= this.questions.length) {
+            this.finishQuiz();
+        } else {
+            this.resetCard();
+        }
+    },
+
+    async finishQuiz() {
+        try {
+            this.summary = await API.post('/quiz/' + this.sessionId + '/complete');
+        } catch (e) {
+            // Still show summary from local data
+        }
+        this.phase = 'summary';
+    }
+}">
+    <!-- SETUP PHASE -->
+    <div x-show="phase === 'setup'">
+        <h1 class="text-2xl font-bold text-gray-800 mb-6">Start a Quiz</h1>
+
+        <div class="bg-white rounded-xl shadow-sm p-6 max-w-md">
+            <div class="space-y-5">
+                <!-- Subject buttons -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Subject</label>
+                    <div class="flex flex-wrap gap-2">
+                        <button @click="selectSubject(null)"
+                                :class="subjectId === '' ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
+                                class="px-3 py-2 rounded-lg text-sm font-medium transition">
+                            All
+                        </button>
+                        <template x-for="s in subjects" :key="s.id">
+                            <button @click="selectSubject(s.id)"
+                                    :class="subjectId == s.id ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
+                                    class="px-3 py-2 rounded-lg text-sm font-medium transition"
+                                    x-text="s.name">
+                            </button>
+                        </template>
+                    </div>
+                </div>
+
+                <!-- Category buttons (shown when a subject with categories is selected) -->
+                <div x-show="subjectId && subjectCategories[subjectId]?.length > 0"
+                     x-transition:enter="transition ease-out duration-150"
+                     x-transition:enter-start="opacity-0 -translate-y-1"
+                     x-transition:enter-end="opacity-100 translate-y-0">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Category</label>
+                    <div class="flex flex-wrap gap-2">
+                        <button @click="categoryId = null"
+                                :class="!categoryId ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
+                                class="px-3 py-2 rounded-lg text-sm font-medium transition">
+                            All
+                        </button>
+                        <template x-for="c in (subjectCategories[subjectId] || [])" :key="c.id">
+                            <button @click="categoryId = c.id"
+                                    :class="categoryId === c.id ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
+                                    class="px-3 py-2 rounded-lg text-sm font-medium transition"
+                                    x-text="c.name">
+                            </button>
+                        </template>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">
+                        Questions: <span x-text="count"></span>
+                    </label>
+                    <input type="range" x-model.number="count" min="5" max="50" step="5"
+                           class="w-full accent-indigo-600">
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Mode</label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <template x-for="m in [{id:'mixed',label:'Mixed'},{id:'flashcard',label:'Flashcard'},{id:'mcq',label:'Multiple Choice'},{id:'typed',label:'Type Answer'}]" :key="m.id">
+                            <button @click="mode = m.id"
+                                    :class="mode === m.id ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
+                                    class="px-3 py-2 rounded-lg text-sm font-medium transition"
+                                    x-text="m.label">
+                            </button>
+                        </template>
+                    </div>
+                </div>
+
+                <button @click="startQuiz()" :disabled="startingQuiz"
+                        class="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-75 transition flex items-center justify-center gap-2">
+                    <template x-if="startingQuiz">
+                        <span class="flex items-center gap-2">
+                            <svg class="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                            </svg>
+                            Preparing quiz…
+                        </span>
+                    </template>
+                    <template x-if="!startingQuiz">
+                        <span>Start Quiz</span>
+                    </template>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- QUIZ PHASE -->
+    <div x-show="phase === 'quiz'" class="max-w-2xl mx-auto">
+        <!-- Progress bar -->
+        <div class="mb-4">
+            <div class="flex justify-between text-sm text-gray-500 mb-1">
+                <span x-text="(currentIndex + 1) + ' / ' + questions.length"></span>
+                <span x-text="currentQuestion?.subject_name || ''"></span>
+            </div>
+            <div class="w-full bg-gray-200 rounded-full h-2">
+                <div class="bg-indigo-600 h-2 rounded-full transition-all duration-300"
+                     :style="'width: ' + progressPct + '%'"></div>
+            </div>
+        </div>
+
+        <div x-show="currentQuestion" class="bg-white rounded-xl shadow-sm p-6">
+            <!-- Question -->
+            <p class="text-lg font-medium text-gray-800 mb-4" x-text="currentQuestion?.question_text"></p>
+
+            <!-- Question image intentionally hidden: source screenshots contain the answer -->
+
+            <!-- FLASHCARD FORMAT -->
+            <div x-show="currentFormat === 'flashcard'">
+                <!-- Pre-reveal -->
+                <div x-show="!showAnswer" class="text-center">
+                    <button @click="revealFlashcard()"
+                            class="bg-indigo-600 text-white px-6 py-3 rounded-lg font-medium hover:bg-indigo-700 transition">
+                        Show Answer
+                    </button>
+                </div>
+                <!-- Post-reveal: answer + rate + next -->
+                <div x-show="showAnswer" class="space-y-4">
+                    <div class="bg-green-50 rounded-lg p-4">
+                        <p class="text-sm font-medium text-green-700">Answer:</p>
+                        <p class="text-green-800 mt-1" x-text="currentQuestion?.answer_text"></p>
+                    </div>
+                    <p class="text-sm text-gray-500 text-center">How well did you know this?</p>
+                    <div class="grid grid-cols-4 gap-2">
+                        <button @click="showAnswer = false; selectedQuality = null"
+                                class="py-2.5 rounded-lg text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition">
+                            Hide
+                        </button>
+                        <button @click="selectedQuality = 3" :disabled="submitting"
+                                :class="selectedQuality === 3 ? 'ring-2 ring-yellow-400 bg-yellow-200' : 'bg-yellow-100'"
+                                class="py-2.5 rounded-lg text-sm font-medium text-yellow-700 hover:bg-yellow-200 transition">
+                            Hard
+                        </button>
+                        <button @click="selectedQuality = 4" :disabled="submitting"
+                                :class="selectedQuality === 4 ? 'ring-2 ring-blue-400 bg-blue-200' : 'bg-blue-100'"
+                                class="py-2.5 rounded-lg text-sm font-medium text-blue-700 hover:bg-blue-200 transition">
+                            Good
+                        </button>
+                        <button @click="selectedQuality = 5" :disabled="submitting"
+                                :class="selectedQuality === 5 ? 'ring-2 ring-green-400 bg-green-200' : 'bg-green-100'"
+                                class="py-2.5 rounded-lg text-sm font-medium text-green-700 hover:bg-green-200 transition">
+                            Easy
+                        </button>
+                    </div>
+                    <button @click="rateAndNext(selectedQuality || 3)" :disabled="submitting"
+                            class="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 transition">
+                        <span x-show="!submitting" x-text="currentIndex >= questions.length - 1 ? 'Finish Quiz' : 'Next Question'"></span>
+                        <span x-show="submitting">Saving…</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- MCQ FORMAT -->
+            <div x-show="currentFormat === 'mcq' && !result" class="space-y-2">
+                <template x-for="(opt, idx) in (currentQuestion?.mcq_options || [])" :key="idx">
+                    <button @click="selectedOption = opt.option_text"
+                            :class="selectedOption === opt.option_text ? 'border-indigo-600 bg-indigo-50' : 'border-gray-200 hover:border-gray-300'"
+                            class="w-full text-left p-3 rounded-lg border-2 text-sm transition"
+                            x-text="opt.option_text">
+                    </button>
+                </template>
+                <button @click="submitMCQ()" :disabled="!selectedOption || submitting"
+                        class="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 transition mt-3">
+                    <span x-show="!submitting">Submit</span>
+                    <span x-show="submitting">Checking...</span>
+                </button>
+            </div>
+
+            <!-- TYPED FORMAT -->
+            <div x-show="currentFormat === 'typed' && !result" class="space-y-3">
+                <textarea x-model="typedAnswer" rows="3" placeholder="Type your answer..."
+                          @keydown.ctrl.enter="submitTyped()"
+                          class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm"></textarea>
+                <button @click="submitTyped()" :disabled="!typedAnswer.trim() || submitting"
+                        class="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 transition">
+                    <span x-show="!submitting">Submit Answer</span>
+                    <span x-show="submitting">AI is judging...</span>
+                </button>
+            </div>
+
+            <!-- RESULT (shown after MCQ/Typed answer only) -->
+            <div x-show="result && currentFormat !== 'flashcard'" class="space-y-3 mt-4">
+                <div class="rounded-lg p-4"
+                     :class="result?.is_correct ? 'bg-green-50' : 'bg-red-50'">
+                    <p class="font-medium text-sm"
+                       :class="result?.is_correct ? 'text-green-700' : 'text-red-700'"
+                       x-text="result?.is_correct ? 'Correct!' : 'Incorrect'"></p>
+                    <p class="text-sm mt-1"
+                       :class="result?.is_correct ? 'text-green-600' : 'text-red-600'"
+                       x-text="'Answer: ' + (result?.correct_answer || '')"></p>
+                    <p x-show="result?.feedback" class="text-sm mt-2 text-gray-600" x-text="result?.feedback"></p>
+                </div>
+                <!-- Incorrect: offer Try Again alongside Next -->
+                <div x-show="!result?.is_correct" class="flex gap-2">
+                    <button @click="tryAgain()"
+                            class="flex-1 bg-amber-500 text-white py-2.5 rounded-lg font-medium hover:bg-amber-600 transition">
+                        Try Again
+                    </button>
+                    <button @click="nextQuestion()"
+                            class="flex-1 bg-gray-200 text-gray-700 py-2.5 rounded-lg font-medium hover:bg-gray-300 transition">
+                        <span x-text="currentIndex >= questions.length - 1 ? 'Finish Quiz' : 'Skip'"></span>
+                    </button>
+                </div>
+                <!-- Correct: just advance -->
+                <button x-show="result?.is_correct" @click="nextQuestion()"
+                        class="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 transition">
+                    <span x-text="currentIndex >= questions.length - 1 ? 'Finish Quiz' : 'Next Question'"></span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- SUMMARY PHASE -->
+    <div x-show="phase === 'summary'" class="max-w-md mx-auto">
+        <div class="bg-white rounded-xl shadow-sm p-8 text-center">
+            <h2 class="text-2xl font-bold text-gray-800 mb-2">Quiz Complete!</h2>
+
+            <div class="my-6">
+                <div class="text-5xl font-bold"
+                     :class="(summary?.correct || 0) / (summary?.total || 1) >= 0.7 ? 'text-green-600' : 'text-yellow-600'"
+                     x-text="Math.round(((summary?.correct || 0) / (summary?.total || 1)) * 100) + '%'"></div>
+                <p class="text-gray-500 mt-1">accuracy</p>
+            </div>
+
+            <div class="grid grid-cols-3 gap-4 mb-6">
+                <div class="bg-green-50 rounded-lg p-3">
+                    <div class="text-xl font-bold text-green-600" x-text="summary?.correct || 0"></div>
+                    <div class="text-xs text-green-700">Correct</div>
+                </div>
+                <div class="bg-red-50 rounded-lg p-3">
+                    <div class="text-xl font-bold text-red-600" x-text="summary?.incorrect || 0"></div>
+                    <div class="text-xs text-red-700">Incorrect</div>
+                </div>
+                <div class="bg-gray-50 rounded-lg p-3">
+                    <div class="text-xl font-bold text-gray-600" x-text="summary?.total || 0"></div>
+                    <div class="text-xs text-gray-700">Total</div>
+                </div>
+            </div>
+
+            <div class="flex gap-3">
+                <button @click="phase = 'setup'"
+                        class="flex-1 bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 transition">
+                    Quiz Again
+                </button>
+                <a href="#home"
+                   class="flex-1 bg-gray-100 text-gray-700 py-2.5 rounded-lg font-medium hover:bg-gray-200 transition text-center">
+                    Home
+                </a>
+            </div>
+        </div>
+    </div>
+</div>

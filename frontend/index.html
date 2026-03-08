@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RevisionAid</title>
+    <meta name="theme-color" content="#4f46e5">
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body class="bg-gray-50 min-h-screen" x-data>
+
+    <!-- Navigation -->
+    <nav class="bg-indigo-600 text-white sticky top-0 z-50 shadow-md"
+         x-show="$store.app.isLoggedIn"
+         x-data="{ mobileOpen: false }">
+        <div class="max-w-5xl mx-auto px-4">
+            <div class="flex items-center justify-between h-14">
+                <!-- Logo -->
+                <a href="#home" class="font-bold text-lg tracking-tight">RevisionAid</a>
+
+                <!-- Desktop nav -->
+                <div class="hidden sm:flex items-center gap-1">
+                    <a href="#home" class="px-3 py-2 rounded-md text-sm hover:bg-indigo-500 transition">Home</a>
+                    <a href="#upload" class="px-3 py-2 rounded-md text-sm hover:bg-indigo-500 transition">Upload</a>
+                    <a href="#quiz" class="px-3 py-2 rounded-md text-sm hover:bg-indigo-500 transition">Quiz</a>
+                    <a href="#shared" class="px-3 py-2 rounded-md text-sm hover:bg-indigo-500 transition">Shared</a>
+                    <a href="#dashboard" class="px-3 py-2 rounded-md text-sm hover:bg-indigo-500 transition">Dashboard</a>
+                    <a href="#subjects" class="px-3 py-2 rounded-md text-sm hover:bg-indigo-500 transition">Subjects</a>
+                    <a href="#admin" x-show="$store.app.isAdmin"
+                       class="px-3 py-2 rounded-md text-sm hover:bg-indigo-500 transition bg-indigo-700">Admin</a>
+
+                    <!-- Profile dropdown -->
+                    <div class="relative ml-2" x-data="{ open: false }" @click.outside="open = false">
+                        <button @click="open = !open"
+                                class="flex items-center gap-1.5 px-3 py-2 rounded-md text-sm hover:bg-indigo-500 transition">
+                            <span x-text="$store.app.user?.display_name || $store.app.user?.username"></span>
+                            <span x-show="$store.app.isAdmin"
+                                  class="bg-yellow-400 text-yellow-900 text-xs font-bold px-1.5 py-0.5 rounded">ADMIN</span>
+                            <svg class="w-4 h-4 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                            </svg>
+                        </button>
+                        <div x-show="open" x-transition
+                             class="absolute right-0 mt-1 w-44 bg-white rounded-lg shadow-lg py-1 z-50 text-gray-700">
+                            <a href="#profile" @click="open = false"
+                               class="flex items-center gap-2 px-4 py-2 text-sm hover:bg-gray-50 transition">
+                                <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+                                </svg>
+                                Profile &amp; Settings
+                            </a>
+                            <hr class="my-1 border-gray-100">
+                            <button @click="$store.app.logout(); open = false"
+                                    class="flex items-center gap-2 w-full text-left px-4 py-2 text-sm hover:bg-gray-50 text-red-600 transition">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+                                </svg>
+                                Logout
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Mobile hamburger -->
+                <button @click="mobileOpen = !mobileOpen" class="sm:hidden p-2">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path x-show="!mobileOpen" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+                        <path x-show="mobileOpen" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Mobile menu -->
+            <div x-show="mobileOpen" x-transition class="sm:hidden pb-3 space-y-1">
+                <!-- User info banner -->
+                <div class="flex items-center gap-2 px-3 py-2 mb-1 border-b border-indigo-500">
+                    <span class="text-sm font-medium" x-text="$store.app.user?.display_name || $store.app.user?.username"></span>
+                    <span x-show="$store.app.isAdmin"
+                          class="bg-yellow-400 text-yellow-900 text-xs font-bold px-1.5 py-0.5 rounded">ADMIN</span>
+                </div>
+                <a href="#home" @click="mobileOpen=false" class="block px-3 py-2 rounded-md hover:bg-indigo-500">Home</a>
+                <a href="#upload" @click="mobileOpen=false" class="block px-3 py-2 rounded-md hover:bg-indigo-500">Upload</a>
+                <a href="#quiz" @click="mobileOpen=false" class="block px-3 py-2 rounded-md hover:bg-indigo-500">Quiz</a>
+                <a href="#shared" @click="mobileOpen=false" class="block px-3 py-2 rounded-md hover:bg-indigo-500">Shared</a>
+                <a href="#dashboard" @click="mobileOpen=false" class="block px-3 py-2 rounded-md hover:bg-indigo-500">Dashboard</a>
+                <a href="#subjects" @click="mobileOpen=false" class="block px-3 py-2 rounded-md hover:bg-indigo-500">Subjects</a>
+                <a href="#admin" @click="mobileOpen=false" x-show="$store.app.isAdmin"
+                   class="block px-3 py-2 rounded-md hover:bg-indigo-500 bg-indigo-700">Admin</a>
+                <a href="#profile" @click="mobileOpen=false" class="block px-3 py-2 rounded-md hover:bg-indigo-500">Profile &amp; Settings</a>
+                <button @click="$store.app.logout(); mobileOpen=false"
+                        class="w-full text-left px-3 py-2 rounded-md hover:bg-indigo-500 text-red-200">Logout</button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Toast notification -->
+    <div x-show="$store.app.toast" x-transition
+         class="fixed top-16 right-4 z-50 toast-enter"
+         :class="{
+             'bg-green-500': $store.app.toast?.type === 'success',
+             'bg-red-500': $store.app.toast?.type === 'error',
+             'bg-blue-500': $store.app.toast?.type === 'info'
+         }">
+        <div class="text-white px-4 py-2 rounded-lg shadow-lg text-sm"
+             x-text="$store.app.toast?.message"></div>
+    </div>
+
+    <!-- Page content -->
+    <main id="page-content" class="max-w-5xl mx-auto px-4 py-6">
+        <div class="text-center py-12 text-gray-400">Loading...</div>
+    </main>
+
+    <!-- Offline indicator -->
+    <div x-data="{ offline: !navigator.onLine }"
+         @online.window="offline = false"
+         @offline.window="offline = true"
+         x-show="offline"
+         class="fixed bottom-4 left-4 z-50 bg-yellow-500 text-white px-4 py-2 rounded-lg shadow-lg text-sm">
+        You're offline. Some features may be limited.
+    </div>
+
+    <!-- Scripts (order matters: api before db before router before app) -->
+    <script src="/static/js/api.js"></script>
+    <script src="/static/js/db.js"></script>
+    <script src="/static/js/utils.js"></script>
+    <script src="/static/js/router.js"></script>
+    <script src="/static/js/app.js"></script>
+
+    <!-- Register service worker -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/static/sw.js')
+                .then(reg => console.log('SW registered'))
+                .catch(err => console.warn('SW registration failed:', err));
+        }
+    </script>
+</body>
+</html>

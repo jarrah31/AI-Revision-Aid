@@ -1,0 +1,127 @@
+<script>
+Alpine.data('homePage', () => ({
+    subjects: [],
+    pendingBatches: [],
+    loading: true,
+
+    async init() {
+        try {
+            const [subjects, summary] = await Promise.all([
+                API.get('/subjects'),
+                API.get('/dashboard/summary'),
+            ]);
+            this.subjects = subjects;
+            this.pendingBatches = summary.pending_review_batches || [];
+        } catch (e) {
+            $store.app.showToast('Failed to load home page', 'error');
+        } finally {
+            this.loading = false;
+        }
+    },
+
+    totalPending() {
+        return this.pendingBatches.reduce((s, b) => s + b.pending_count, 0);
+    },
+}));
+</script>
+
+<div x-data="homePage">
+    <div class="flex items-center justify-between mb-6">
+        <div>
+            <h1 class="text-2xl font-bold text-gray-800">
+                Welcome, <span x-text="$store.app.user?.display_name || 'Student'"></span>
+            </h1>
+            <p class="text-gray-500 text-sm mt-1">
+                Year <span x-text="$store.app.user?.year_group"></span>
+            </p>
+        </div>
+        <a href="#upload" class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition">
+            Upload PDF
+        </a>
+    </div>
+
+    <!-- Pending review banner -->
+    <div x-show="!loading && pendingBatches.length > 0"
+         class="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6">
+        <div class="flex items-start gap-3">
+            <div class="text-2xl leading-none mt-0.5">✏️</div>
+            <div class="flex-1 min-w-0">
+                <h2 class="font-semibold text-amber-800 mb-1">
+                    <span x-text="totalPending()"></span>
+                    question<span x-show="totalPending() !== 1">s</span>
+                    awaiting your review
+                </h2>
+                <p class="text-sm text-amber-700 mb-3">
+                    AI has extracted questions from your uploads. Review and approve them before quizzing.
+                </p>
+                <div class="flex flex-col gap-2">
+                    <template x-for="b in pendingBatches" :key="b.id">
+                        <a :href="'#review/' + b.id"
+                           class="flex items-center justify-between bg-white border border-amber-200 rounded-lg px-3 py-2 hover:bg-amber-50 transition group">
+                            <div class="flex items-center gap-2 min-w-0">
+                                <span class="text-amber-500 text-sm">📄</span>
+                                <span class="text-sm font-medium text-gray-800 truncate" x-text="b.filename"></span>
+                                <span class="text-xs text-gray-500 whitespace-nowrap" x-text="'(' + b.subject_name + ')'"></span>
+                            </div>
+                            <div class="flex items-center gap-2 ml-3 flex-shrink-0">
+                                <span class="text-xs font-semibold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full"
+                                      x-text="b.pending_count + ' to review'"></span>
+                                <span class="text-amber-600 group-hover:translate-x-0.5 transition-transform">→</span>
+                            </div>
+                        </a>
+                    </template>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Quick actions -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-8">
+        <a href="#quiz" class="bg-white rounded-xl p-4 shadow-sm card-hover text-center">
+            <div class="text-2xl mb-1">&#9889;</div>
+            <div class="text-sm font-medium text-gray-700">Quick Quiz</div>
+        </a>
+        <a href="#dashboard" class="bg-white rounded-xl p-4 shadow-sm card-hover text-center">
+            <div class="text-2xl mb-1">&#128200;</div>
+            <div class="text-sm font-medium text-gray-700">Dashboard</div>
+        </a>
+        <a href="#shared" class="bg-white rounded-xl p-4 shadow-sm card-hover text-center">
+            <div class="text-2xl mb-1">&#128101;</div>
+            <div class="text-sm font-medium text-gray-700">Shared</div>
+        </a>
+        <a href="#subjects" class="bg-white rounded-xl p-4 shadow-sm card-hover text-center">
+            <div class="text-2xl mb-1">&#128218;</div>
+            <div class="text-sm font-medium text-gray-700">Subjects</div>
+        </a>
+    </div>
+
+    <!-- Subject cards -->
+    <h2 class="text-lg font-semibold text-gray-700 mb-3">Your Subjects</h2>
+
+    <div x-show="loading" class="text-center py-8 text-gray-400">Loading...</div>
+
+    <div x-show="!loading && subjects.length === 0" class="text-center py-12 bg-white rounded-xl shadow-sm">
+        <p class="text-gray-500 mb-3">No subjects yet. Create one to get started.</p>
+        <a href="#subjects" class="text-indigo-600 font-medium hover:underline">Manage Subjects</a>
+    </div>
+
+    <div x-show="!loading && subjects.length > 0"
+         class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <template x-for="subject in subjects" :key="subject.id">
+            <div class="bg-white rounded-xl shadow-sm p-5 card-hover border-l-4"
+                 :style="'border-color: ' + (subject.color || '#6366f1')">
+                <div class="flex items-center gap-2 mb-2">
+                    <span x-show="subject.icon" x-text="subject.icon" class="text-xl"></span>
+                    <h3 class="font-semibold text-gray-800" x-text="subject.name"></h3>
+                </div>
+                <p class="text-sm text-gray-500 mb-3">
+                    <span x-text="subject.question_count || 0"></span> questions
+                </p>
+                <a :href="'#quiz/' + subject.id"
+                   class="text-sm text-indigo-600 font-medium hover:underline">
+                    Start Quiz &rarr;
+                </a>
+            </div>
+        </template>
+    </div>
+</div>
