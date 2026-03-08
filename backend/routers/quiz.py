@@ -77,7 +77,7 @@ def start_quiz(
         params + [today],
     ).fetchall()
 
-    # 3. New cards (no SRS entry yet) - limit to 5
+    # 3. New cards (no SRS entry yet) - fill remaining slots up to req.count
     new_cards = db.execute(
         f"""SELECT q.*, NULL as easiness_factor, NULL as interval_days,
                    NULL as repetitions, NULL as next_review_date,
@@ -89,7 +89,7 @@ def start_quiz(
             LEFT JOIN subjects s ON s.id = q.subject_id
             LEFT JOIN categories c ON c.id = q.category_id
             WHERE {where} AND sc.id IS NULL
-            LIMIT 5""",
+            LIMIT {req.count}""",
         params,
     ).fetchall()
 

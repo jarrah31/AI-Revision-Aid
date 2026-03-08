@@ -38,7 +38,7 @@ Alpine.data('adminPage', () => ({
         try {
             this.users = await API.get('/admin/users');
         } catch (e) {
-            $store.app.showToast('Failed to load users', 'error');
+            Alpine.store('app').showToast('Failed to load users', 'error');
         } finally {
             this.loadingUsers = false;
         }
@@ -52,11 +52,11 @@ Alpine.data('adminPage', () => ({
     async saveUser(id) {
         try {
             await API.put('/admin/users/' + id, this.userForm);
-            $store.app.showToast('User updated', 'success');
+            Alpine.store('app').showToast('User updated', 'success');
             this.editingUser = null;
             await this.loadUsers();
         } catch (e) {
-            $store.app.showToast(e.message, 'error');
+            Alpine.store('app').showToast(e.message, 'error');
         }
     },
 
@@ -64,10 +64,10 @@ Alpine.data('adminPage', () => ({
         if (!confirm('Delete user "' + name + '"? This deletes all their data.')) return;
         try {
             await API.del('/admin/users/' + id);
-            $store.app.showToast('User deleted', 'success');
+            Alpine.store('app').showToast('User deleted', 'success');
             await this.loadUsers();
         } catch (e) {
-            $store.app.showToast(e.message, 'error');
+            Alpine.store('app').showToast(e.message, 'error');
         }
     },
 
@@ -77,7 +77,7 @@ Alpine.data('adminPage', () => ({
         try {
             this.batches = await API.get('/admin/batches');
         } catch (e) {
-            $store.app.showToast('Failed to load batches', 'error');
+            Alpine.store('app').showToast('Failed to load batches', 'error');
         } finally {
             this.loadingBatches = false;
         }
@@ -89,7 +89,7 @@ Alpine.data('adminPage', () => ({
             this.batchDetail = res.batch;
             this.batchQuestions = res.questions;
         } catch (e) {
-            $store.app.showToast('Failed to load batch', 'error');
+            Alpine.store('app').showToast('Failed to load batch', 'error');
         }
     },
 
@@ -110,9 +110,9 @@ Alpine.data('adminPage', () => ({
             const q = this.batchQuestions.find(q => q.id === id);
             if (q) { q.question_text = this.questionForm.question_text; q.answer_text = this.questionForm.answer_text; }
             this.editingQuestion = null;
-            $store.app.showToast('Question updated', 'success');
+            Alpine.store('app').showToast('Question updated', 'success');
         } catch (e) {
-            $store.app.showToast(e.message, 'error');
+            Alpine.store('app').showToast(e.message, 'error');
         }
     },
 
@@ -121,9 +121,9 @@ Alpine.data('adminPage', () => ({
         try {
             await API.del('/admin/questions/' + id);
             this.batchQuestions = this.batchQuestions.filter(q => q.id !== id);
-            $store.app.showToast('Question deleted', 'success');
+            Alpine.store('app').showToast('Question deleted', 'success');
         } catch (e) {
-            $store.app.showToast(e.message, 'error');
+            Alpine.store('app').showToast(e.message, 'error');
         }
     },
 
@@ -131,11 +131,11 @@ Alpine.data('adminPage', () => ({
         if (!confirm('Delete this entire batch and all its questions?')) return;
         try {
             await API.del('/admin/batches/' + id);
-            $store.app.showToast('Batch deleted', 'success');
+            Alpine.store('app').showToast('Batch deleted', 'success');
             this.closeBatchView();
             await this.loadBatches();
         } catch (e) {
-            $store.app.showToast(e.message, 'error');
+            Alpine.store('app').showToast(e.message, 'error');
         }
     },
 
@@ -144,9 +144,9 @@ Alpine.data('adminPage', () => ({
             const res = await API.put('/admin/batches/' + id + '/sharing');
             const b = this.batches.find(b => b.id === id);
             if (b) b.is_shared = res.is_shared ? 1 : 0;
-            $store.app.showToast(res.is_shared ? 'Now shared' : 'Now private', 'success');
+            Alpine.store('app').showToast(res.is_shared ? 'Now shared' : 'Now private', 'success');
         } catch (e) {
-            $store.app.showToast(e.message, 'error');
+            Alpine.store('app').showToast(e.message, 'error');
         }
     },
 
@@ -154,11 +154,11 @@ Alpine.data('adminPage', () => ({
         if (!confirm('Re-process this batch? Mode: ' + mode)) return;
         try {
             await API.post('/admin/batches/' + id + '/reprocess', { mode });
-            $store.app.showToast('Re-processing started', 'success');
+            Alpine.store('app').showToast('Re-processing started', 'success');
             this.closeBatchView();
             await this.loadBatches();
         } catch (e) {
-            $store.app.showToast(e.message, 'error');
+            Alpine.store('app').showToast(e.message, 'error');
         }
     },
 
@@ -177,7 +177,7 @@ Alpine.data('adminPage', () => ({
             this.settingForms.anthropic_api_key = this.dbSettings.anthropic_api_key?.value || '';
             this.settingForms.jwt_secret = this.dbSettings.jwt_secret?.value || '';
         } catch (e) {
-            $store.app.showToast('Failed to load settings', 'error');
+            Alpine.store('app').showToast('Failed to load settings', 'error');
         } finally {
             this.loadingSettings = false;
         }
