@@ -122,6 +122,7 @@ def init_db():
             difficulty INTEGER DEFAULT 1 CHECK (difficulty BETWEEN 1 AND 3),
             approved INTEGER NOT NULL DEFAULT 0,
             image_id INTEGER DEFAULT NULL,
+            source_context TEXT DEFAULT NULL,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now')),
             FOREIGN KEY (batch_id) REFERENCES upload_batches(id) ON DELETE CASCADE,
@@ -253,6 +254,7 @@ def init_db():
         "ALTER TABLE questions ADD COLUMN fact_check_result TEXT DEFAULT NULL",
         "ALTER TABLE questions ADD COLUMN fact_checked_at TEXT DEFAULT NULL",
         "ALTER TABLE questions ADD COLUMN category_id INTEGER DEFAULT NULL REFERENCES categories(id) ON DELETE SET NULL",
+        "ALTER TABLE questions ADD COLUMN source_context TEXT DEFAULT NULL",
     ]:
         try:
             db.execute(migration)

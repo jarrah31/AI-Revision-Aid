@@ -97,8 +97,8 @@ def process_batch(batch_id: int, pdf_path: str, subject_name: str, subject_id: i
                     db.execute(
                         """INSERT INTO questions
                            (batch_id, user_id, subject_id, page_number, question_text,
-                            answer_text, question_type, difficulty, image_id)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            answer_text, question_type, difficulty, image_id, source_context)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (
                             batch_id,
                             user_id,
@@ -109,6 +109,7 @@ def process_batch(batch_id: int, pdf_path: str, subject_name: str, subject_id: i
                             q.get("type", "factual"),
                             q.get("difficulty", 1),
                             image_id,
+                            q.get("source_quote") or None,
                         ),
                     )
 
