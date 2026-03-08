@@ -22,7 +22,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}   # e.g. paul/revisionaid
+  IMAGE_NAME: ${{ github.repository }}   # e.g. jarrah31/ai-revision-aid
 
 jobs:
   # ── Must pass tests before publishing ────────────────────────────────────────
