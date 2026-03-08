@@ -1,10 +1,12 @@
 services:
-  web:
+  ai-revision-aid:
     # ── Option A: use the published image (recommended for end-users) ──────────
     image: ghcr.io/jarrah31/ai-revision-aid:latest
 
     # ── Option B: build locally from source (for development) ─────────────────
     # build: .
+
+    container_name: ai-revision-aid
 
     ports:
       - "8000:8000"
