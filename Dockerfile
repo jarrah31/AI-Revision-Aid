@@ -15,11 +15,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Ensure the data directories exist inside the image so the volume mount
-# works correctly even on a first run with an empty host directory.
-RUN mkdir -p data/images data/pdfs
+# Copy and register the entrypoint script
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 EXPOSE 8000
 
-# Use uvicorn directly (no --reload in production)
+# entrypoint.sh re-creates data/images and data/pdfs at container start so
+# the app works even when data/ is a freshly-mounted empty volume.
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["uvicorn", "backend.app:app", "--host", "0.0.0.0", "--port", "8000"]
