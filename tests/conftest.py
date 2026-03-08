@@ -52,6 +52,7 @@ def mock_claude_services(monkeypatch):
     """Replace every function that would call the Anthropic API with a stub."""
     import backend.routers.questions as q_router
     import backend.routers.quiz as quiz_router
+    import backend.routers.admin as admin_router
 
     # Background MCQ generation called after question approval
     monkeypatch.setattr(q_router, "ensure_mcq_options_bg", lambda *a, **kw: None)
@@ -72,6 +73,9 @@ def mock_claude_services(monkeypatch):
         )
 
     monkeypatch.setattr(quiz_router, "judge_typed_answer", _fake_judge)
+
+    # API key validation called when saving the anthropic_api_key setting
+    monkeypatch.setattr(admin_router, "validate_api_key", lambda key: (True, "API key is valid"))
 
 
 # ── HTTP client ───────────────────────────────────────────────────────────────

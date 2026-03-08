@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from backend.auth import get_admin_user
 from backend.database import get_db, DB_PATH
 from backend.services.image_service import delete_batch_images, delete_batch_pdf
+from backend.services.claude_service import validate_api_key
 from backend.routers.upload import process_batch
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
@@ -332,7 +333,9 @@ def update_setting(
     admin: dict = Depends(get_admin_user),
     db: sqlite3.Connection = Depends(get_db),
 ):
-    """Update a single setting value."""
+    """Update a single setting value.
+    For anthropic_api_key, the key is validated against the API before saving.
+    """
     if key not in _ALLOWED_SETTINGS:
         raise HTTPException(
             status_code=400,
@@ -341,12 +344,22 @@ def update_setting(
     if not req.value.strip():
         raise HTTPException(status_code=400, detail="Value must not be empty")
 
+    # Validate the Anthropic API key before persisting it
+    if key == "anthropic_api_key":
+        ok, validation_message = validate_api_key(req.value.strip())
+        if not ok:
+            raise HTTPException(status_code=400, detail=validation_message)
+
     db.execute(
         "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))",
         (key, req.value.strip()),
     )
     db.commit()
-    return {"message": "Setting updated", "key": key}
+
+    response = {"message": "Setting updated", "key": key}
+    if key == "anthropic_api_key":
+        response["validation"] = "API key is valid"
+    return response
 
 
 @router.get("/stats")

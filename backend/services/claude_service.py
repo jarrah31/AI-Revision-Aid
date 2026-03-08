@@ -21,6 +21,20 @@ def get_client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=api_key)
 
 
+def validate_api_key(key: str) -> tuple[bool, str]:
+    """Test an API key by listing models — minimal auth check, no tokens consumed."""
+    try:
+        client = anthropic.Anthropic(api_key=key)
+        client.models.list(limit=1)
+        return True, "API key is valid"
+    except anthropic.AuthenticationError:
+        return False, "Invalid API key — authentication failed"
+    except anthropic.PermissionDeniedError:
+        return False, "API key lacks required permissions"
+    except Exception as e:
+        return False, f"Validation failed: {str(e)}"
+
+
 def _calc_usage(message) -> dict:
     """Extract token counts and compute cost from an API response."""
     input_tokens = message.usage.input_tokens

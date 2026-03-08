@@ -21,6 +21,8 @@ Alpine.data('adminPage', () => ({
     settingForms: { anthropic_api_key: '', jwt_secret: '' },
     showApiKey: false,
     showJwtSecret: false,
+    apiKeyValidating: false,
+    apiKeyStatus: null,   // null | { ok: bool, msg: str }
 
     // Stats
     stats: null,
@@ -184,23 +186,43 @@ Alpine.data('adminPage', () => ({
     async saveSetting(key) {
         const val = this.settingForms[key];
         if (!val || !val.trim()) {
-            $store.app.showToast('Value cannot be empty', 'error');
+            Alpine.store('app').showToast('Value cannot be empty', 'error');
             return;
         }
+        if (key === 'anthropic_api_key') {
+            this.apiKeyValidating = true;
+            this.apiKeyStatus = null;
+        }
+        // Track outcome with local variables so the status badge can never be
+        // overwritten by a secondary exception (e.g. toast failure)
+        let saveOk = false;
+        let saveErr = null;
         try {
             await API.put('/admin/settings/' + key, { value: val.trim() });
-            $store.app.showToast('Setting saved', 'success');
+            saveOk = true;
+        } catch (e) {
+            saveErr = e.message || 'Save failed';
+        } finally {
+            if (key === 'anthropic_api_key') {
+                this.apiKeyValidating = false;
+                this.apiKeyStatus = saveOk
+                    ? { ok: true,  msg: 'API key is valid' }
+                    : { ok: false, msg: saveErr || 'Validation failed' };
+            }
+        }
+        if (saveOk) {
+            Alpine.store('app').showToast('Setting saved', 'success');
             // Changing JWT secret invalidates all existing tokens → log out
             if (key === 'jwt_secret') {
-                $store.app.showToast('JWT secret changed — you will be logged out now.', 'error');
+                Alpine.store('app').showToast('JWT secret changed — you will be logged out now.', 'error');
                 setTimeout(() => {
                     localStorage.removeItem('token');
                     window.location.hash = '#login';
                     window.location.reload();
                 }, 2500);
             }
-        } catch (e) {
-            $store.app.showToast(e.message || 'Save failed', 'error');
+        } else {
+            Alpine.store('app').showToast(saveErr || 'Save failed', 'error');
         }
     },
 
@@ -365,12 +387,25 @@ Alpine.data('adminPage', () => ({
                             class="px-3 py-2 bg-gray-100 rounded-lg text-sm text-gray-600 hover:bg-gray-200 transition"
                             x-text="showApiKey ? 'Hide' : 'Show'"></button>
                 </div>
-                <div class="flex items-center gap-3 mt-3">
+                <div class="flex items-center gap-3 mt-3 flex-wrap">
                     <button @click="saveSetting('anthropic_api_key')"
-                            class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700 transition">
-                        Save API Key
+                            :disabled="apiKeyValidating"
+                            class="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700 transition disabled:opacity-50 disabled:cursor-not-allowed">
+                        <!-- Spinner shown while validating -->
+                        <svg x-show="apiKeyValidating" class="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                        </svg>
+                        <span x-text="apiKeyValidating ? 'Validating…' : 'Save API Key'"></span>
                     </button>
-                    <span x-show="dbSettings.anthropic_api_key?.masked"
+                    <!-- Validation result badge -->
+                    <span x-show="apiKeyStatus"
+                          :class="apiKeyStatus?.ok ? 'text-green-600 bg-green-50 border-green-200' : 'text-red-600 bg-red-50 border-red-200'"
+                          class="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-full border">
+                        <span x-text="apiKeyStatus?.ok ? '✓' : '✗'"></span>
+                        <span x-text="apiKeyStatus?.msg"></span>
+                    </span>
+                    <span x-show="dbSettings.anthropic_api_key?.masked && !apiKeyStatus"
                           class="text-xs text-gray-400 font-mono"
                           x-text="'Current: ' + (dbSettings.anthropic_api_key?.masked || '(not set)')"></span>
                 </div>
