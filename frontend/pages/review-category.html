@@ -198,6 +198,17 @@ Alpine.data('reviewCategoryPage', () => ({
                              @error="$el.parentElement.style.display='none'">
                     </div>
 
+                    <!-- Full exam page for past paper questions (the page may contain
+                         diagrams or tables that the question refers to) -->
+                    <div x-show="q.question_source === 'past_paper' && !q.image_filename"
+                         class="mt-2 cursor-zoom-in"
+                         @click="window.open(pageImageUrl(q), '_blank')">
+                        <img :src="pageImageUrl(q)"
+                             class="max-h-48 rounded border border-gray-200 hover:opacity-90 transition-opacity"
+                             @error="$el.parentElement.style.display='none'"
+                             title="Click to open full size">
+                    </div>
+
                     <!-- Metadata + actions -->
                     <div class="flex items-center gap-3 mt-3 flex-wrap">
                         <span class="text-xs text-gray-400"

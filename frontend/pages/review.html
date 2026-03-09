@@ -434,6 +434,27 @@ Alpine.data('reviewPage', () => ({
                             </div>
                         </div>
 
+                        <!-- Full exam page for past paper questions (no cropped image exists,
+                             but the page may contain diagrams/graphs the question refers to) -->
+                        <div x-show="q.question_source === 'past_paper' && !q.image_filename"
+                             class="mt-2 inline-block relative group cursor-zoom-in"
+                             @click="openLightbox('/images/batch_' + q.batch_id + '/page_' + q.page_number + '_full.png')">
+                            <img :src="'/images/batch_' + q.batch_id + '/page_' + q.page_number + '_full.png'"
+                                 class="max-h-48 rounded border border-gray-200 block"
+                                 @error="$el.parentElement.style.display='none'">
+                            <div class="absolute inset-0 flex items-center justify-center rounded
+                                        bg-black/0 group-hover:bg-black/20 transition-colors pointer-events-none">
+                                <div class="opacity-0 group-hover:opacity-100 transition-opacity
+                                            bg-black/60 text-white text-xs px-2 py-1 rounded-full flex items-center gap-1">
+                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                              d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z"/>
+                                    </svg>
+                                    Enlarge
+                                </div>
+                            </div>
+                        </div>
+
                         <div class="flex items-center gap-2 mt-3 flex-wrap">
                             <span class="text-xs text-gray-400" x-text="q.question_type + ' | Difficulty: ' + q.difficulty"></span>
                             <!-- Source badge -->
