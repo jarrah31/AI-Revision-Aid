@@ -15,6 +15,7 @@ router = APIRouter()
 def list_questions(
     subject_id: int | None = None,
     batch_id: int | None = None,
+    category_id: int | None = None,
     approved: int | None = None,
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=200),
@@ -30,6 +31,9 @@ def list_questions(
     if batch_id is not None:
         conditions.append("q.batch_id = ?")
         params.append(batch_id)
+    if category_id is not None:
+        conditions.append("q.category_id = ?")
+        params.append(category_id)
     if approved is not None:
         conditions.append("q.approved = ?")
         params.append(approved)

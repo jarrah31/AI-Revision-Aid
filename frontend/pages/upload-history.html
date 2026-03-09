@@ -93,6 +93,13 @@ Alpine.data('uploadHistoryPage', () => ({
                             <span class="text-xs px-2 py-0.5 rounded-full font-medium"
                                   :class="statusClass(b.status)"
                                   x-text="b.status"></span>
+                            <!-- Past paper badge -->
+                            <span x-show="b.batch_type === 'past_paper'"
+                                  class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">
+                                📄 Past Paper
+                                <span x-show="b.exam_board"
+                                      x-text="'· ' + b.exam_board + (b.exam_year ? ' ' + b.exam_year : '') + (b.paper_number ? ' ' + b.paper_number : '')"></span>
+                            </span>
                             <span x-show="b.is_shared"
                                   class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">Shared</span>
                         </div>

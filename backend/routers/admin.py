@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from backend.auth import get_admin_user
 from backend.database import get_db, DB_PATH
 from backend.services.image_service import delete_batch_images, delete_batch_pdf
-from backend.services.claude_service import validate_api_key
+from backend.services.claude_service import validate_api_key, AI_SETTING_DEFAULTS
 from backend.routers.upload import process_batch
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
@@ -360,6 +360,117 @@ def update_setting(
     if key == "anthropic_api_key":
         response["validation"] = "API key is valid"
     return response
+
+
+# ── AI Settings ──
+
+# Human-readable metadata for each AI setting key
+_AI_SETTING_METADATA: dict[str, dict] = {
+    "ai_model_ko_extraction":          {"label": "Model",  "type": "model",  "group": "Knowledge Organiser Extraction",            "group_key": "ko_extraction"},
+    "ai_model_past_paper_extraction":  {"label": "Model",  "type": "model",  "group": "Past Paper Extraction",                    "group_key": "past_paper_extraction"},
+    "ai_model_mcq":                    {"label": "Model",  "type": "model",  "group": "MCQ Generation",                           "group_key": "mcq"},
+    "ai_model_judging":                {"label": "Model",  "type": "model",  "group": "Answer Judging",                           "group_key": "judging"},
+    "ai_model_fact_check":             {"label": "Model",  "type": "model",  "group": "Fact Check",                               "group_key": "fact_check"},
+    "ai_model_matching":               {"label": "Model",  "type": "model",  "group": "Knowledge Organiser → Past Paper Matching", "group_key": "matching"},
+    "ai_prompt_ko_extraction":         {"label": "Prompt", "type": "prompt", "group": "Knowledge Organiser Extraction",            "group_key": "ko_extraction"},
+    "ai_prompt_past_paper_extraction": {"label": "Prompt", "type": "prompt", "group": "Past Paper Extraction",                    "group_key": "past_paper_extraction"},
+    "ai_prompt_mcq":                   {"label": "Prompt", "type": "prompt", "group": "MCQ Generation",                           "group_key": "mcq"},
+    "ai_prompt_judging":               {"label": "Prompt", "type": "prompt", "group": "Answer Judging",                           "group_key": "judging"},
+    "ai_prompt_fact_check":            {"label": "Prompt", "type": "prompt", "group": "Fact Check",                               "group_key": "fact_check"},
+    "ai_prompt_matching":              {"label": "Prompt", "type": "prompt", "group": "Knowledge Organiser → Past Paper Matching", "group_key": "matching"},
+}
+
+AVAILABLE_MODELS: list[str] = [
+    # Claude 4.6 (latest)
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
+    # Claude 4.5
+    "claude-haiku-4-5",
+    "claude-sonnet-4-5",
+    "claude-opus-4-5",
+    # Claude 4.1 / 4 (first release)
+    "claude-opus-4-1",
+    "claude-sonnet-4-20250514",
+    "claude-opus-4-20250514",
+    # Claude 3.x
+    "claude-3-7-sonnet-20250219",
+    "claude-3-5-sonnet-20241022",
+    "claude-3-5-haiku-20241022",
+    "claude-3-opus-20240229",
+]
+
+
+@router.get("/ai-settings")
+def get_ai_settings(
+    admin: dict = Depends(get_admin_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Return all AI model and prompt settings with current values, defaults, and override status."""
+    db_rows = {
+        row["key"]: {"value": row["value"], "updated_at": row["updated_at"]}
+        for row in db.execute(
+            "SELECT key, value, updated_at FROM settings WHERE key LIKE 'ai_%'"
+        ).fetchall()
+    }
+    result = []
+    for key, meta in _AI_SETTING_METADATA.items():
+        default_val = AI_SETTING_DEFAULTS[key]
+        db_entry = db_rows.get(key)
+        result.append({
+            "key":          key,
+            "label":        meta["label"],
+            "type":         meta["type"],
+            "group":        meta["group"],
+            "group_key":    meta["group_key"],
+            "value":        db_entry["value"] if db_entry else default_val,
+            "default":      default_val,
+            "is_overridden": db_entry is not None,
+            "updated_at":   db_entry["updated_at"] if db_entry else None,
+        })
+    return {"settings": result, "available_models": AVAILABLE_MODELS}
+
+
+@router.put("/ai-settings/{key}")
+def update_ai_setting(
+    key: str,
+    req: SettingUpdate,
+    admin: dict = Depends(get_admin_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Save a custom value for an AI model or prompt setting."""
+    if key not in _AI_SETTING_METADATA:
+        raise HTTPException(status_code=400, detail=f"Unknown AI setting key: {key}")
+    if not req.value.strip():
+        raise HTTPException(status_code=400, detail="Value must not be empty")
+    if _AI_SETTING_METADATA[key]["type"] == "model" and req.value.strip() not in AVAILABLE_MODELS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown model. Allowed: {', '.join(AVAILABLE_MODELS)}",
+        )
+    db.execute(
+        "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))",
+        (key, req.value.strip()),
+    )
+    db.commit()
+    return {"message": "AI setting updated", "key": key}
+
+
+@router.delete("/ai-settings/{key}")
+def reset_ai_setting(
+    key: str,
+    admin: dict = Depends(get_admin_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Reset an AI setting to its built-in default by removing the DB override."""
+    if key not in _AI_SETTING_METADATA:
+        raise HTTPException(status_code=400, detail=f"Unknown AI setting key: {key}")
+    db.execute("DELETE FROM settings WHERE key = ?", (key,))
+    db.commit()
+    return {
+        "message": "AI setting reset to default",
+        "key":     key,
+        "default": AI_SETTING_DEFAULTS[key],
+    }
 
 
 @router.get("/stats")

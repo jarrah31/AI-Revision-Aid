@@ -1,10 +1,16 @@
-<div x-data="{
+<script>
+Alpine.data('subjectsPage', () => ({
     subjects: [],
     loading: true,
     showForm: false,
     editingId: null,
     form: { name: '', icon: '', color: '#6366f1' },
     error: '',
+
+    // Accordion state
+    expanded: {},    // { [subject_id]: bool }
+    categories: {},  // { [subject_id]: [...] }
+    loadingCats: {}, // { [subject_id]: bool }
 
     async init() {
         await this.load();
@@ -15,9 +21,29 @@
         try {
             this.subjects = await API.get('/subjects');
         } catch (e) {
-            $store.app.showToast('Failed to load subjects', 'error');
+            Alpine.store('app').showToast('Failed to load subjects', 'error');
         } finally {
             this.loading = false;
+        }
+    },
+
+    async toggleExpand(subjectId) {
+        const isOpen = !!this.expanded[subjectId];
+        this.expanded = { ...this.expanded, [subjectId]: !isOpen };
+        if (!isOpen && !this.categories[subjectId]) {
+            await this.loadCategories(subjectId);
+        }
+    },
+
+    async loadCategories(subjectId) {
+        this.loadingCats = { ...this.loadingCats, [subjectId]: true };
+        try {
+            const cats = await API.get('/categories?subject_id=' + subjectId);
+            this.categories = { ...this.categories, [subjectId]: cats };
+        } catch (e) {
+            Alpine.store('app').showToast('Failed to load categories', 'error');
+        } finally {
+            this.loadingCats = { ...this.loadingCats, [subjectId]: false };
         }
     },
 
@@ -45,12 +71,14 @@
             };
             if (this.editingId) {
                 await API.put('/subjects/' + this.editingId, data);
-                $store.app.showToast('Subject updated', 'success');
+                Alpine.store('app').showToast('Subject updated', 'success');
             } else {
                 await API.post('/subjects', data);
-                $store.app.showToast('Subject created', 'success');
+                Alpine.store('app').showToast('Subject created', 'success');
             }
             this.showForm = false;
+            // Reset category cache so counts refresh after changes
+            this.categories = {};
             await this.load();
         } catch (e) {
             this.error = e.message;
@@ -61,18 +89,21 @@
         if (!confirm('Delete this subject? This will also delete all associated questions.')) return;
         try {
             await API.del('/subjects/' + id);
-            $store.app.showToast('Subject deleted', 'success');
+            Alpine.store('app').showToast('Subject deleted', 'success');
             await this.load();
         } catch (e) {
-            $store.app.showToast('Failed to delete', 'error');
+            Alpine.store('app').showToast('Failed to delete', 'error');
         }
     }
-}">
+}));
+</script>
+
+<div x-data="subjectsPage">
     <div class="flex items-center justify-between mb-6">
         <h1 class="text-2xl font-bold text-gray-800">Subjects</h1>
         <button @click="openNew()"
                 class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition">
-            Add Subject
+            + Add Subject
         </button>
     </div>
 
@@ -92,7 +123,7 @@
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Icon (emoji, optional)</label>
-                    <input x-model="form.icon" type="text" placeholder="e.g. &#129516;"
+                    <input x-model="form.icon" type="text" placeholder="e.g. 🧬"
                            class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
                 </div>
                 <div>
@@ -114,39 +145,131 @@
         </div>
     </div>
 
-    <!-- Subject list -->
+    <!-- Loading -->
     <div x-show="loading" class="text-center py-8 text-gray-400">Loading...</div>
 
+    <!-- Empty state -->
     <div x-show="!loading && subjects.length === 0" class="text-center py-12 bg-white rounded-xl shadow-sm">
-        <p class="text-gray-500">No subjects yet. Click "Add Subject" to create one.</p>
+        <p class="text-gray-500 mb-3">No subjects yet.</p>
+        <button @click="openNew()"
+                class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition">
+            Add your first subject
+        </button>
     </div>
 
+    <!-- Accordion subject list -->
     <div x-show="!loading && subjects.length > 0" class="space-y-3">
         <template x-for="subject in subjects" :key="subject.id">
-            <div class="bg-white rounded-xl shadow-sm p-4 flex items-center justify-between border-l-4"
+            <div class="bg-white rounded-xl shadow-sm overflow-hidden border-l-4"
                  :style="'border-color: ' + (subject.color || '#6366f1')">
-                <div class="flex items-center gap-3">
-                    <span x-show="subject.icon" x-text="subject.icon" class="text-2xl"></span>
-                    <div>
-                        <h3 class="font-semibold text-gray-800" x-text="subject.name"></h3>
-                        <p class="text-sm text-gray-500">
-                            <span x-text="subject.question_count || 0"></span> approved questions
-                        </p>
+
+                <!-- Subject header row (always visible) -->
+                <div class="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-gray-50 transition-colors"
+                     @click="toggleExpand(subject.id)">
+                    <div class="flex items-center gap-3 min-w-0">
+                        <!-- Chevron -->
+                        <svg class="w-4 h-4 text-gray-400 shrink-0 transition-transform duration-200"
+                             :class="expanded[subject.id] ? 'rotate-90' : ''"
+                             fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                        </svg>
+                        <span x-show="subject.icon" x-text="subject.icon" class="text-xl shrink-0"></span>
+                        <div class="min-w-0">
+                            <h3 class="font-semibold text-gray-800 truncate" x-text="subject.name"></h3>
+                            <p class="text-xs text-gray-500">
+                                <span x-text="subject.question_count || 0"></span> approved questions
+                            </p>
+                        </div>
+                    </div>
+                    <!-- Edit / Delete (stop click so it doesn't toggle accordion) -->
+                    <div class="flex items-center gap-1 shrink-0 ml-3" @click.stop>
+                        <button @click="openEdit(subject)"
+                                class="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition"
+                                title="Edit subject">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                      d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                            </svg>
+                        </button>
+                        <button @click="remove(subject.id)"
+                                class="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
+                                title="Delete subject">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                            </svg>
+                        </button>
                     </div>
                 </div>
-                <div class="flex items-center gap-2">
-                    <button @click="openEdit(subject)" class="text-gray-400 hover:text-indigo-600 p-1" title="Edit">
-                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                  d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+
+                <!-- Expanded: category list -->
+                <div x-show="expanded[subject.id]"
+                     x-transition:enter="transition ease-out duration-150"
+                     x-transition:enter-start="opacity-0 -translate-y-1"
+                     x-transition:enter-end="opacity-100 translate-y-0"
+                     class="border-t border-gray-100 bg-gray-50/60 px-4 py-3">
+
+                    <!-- Loading categories -->
+                    <div x-show="loadingCats[subject.id]" class="py-2 text-sm text-gray-400 flex items-center gap-2">
+                        <svg class="animate-spin w-3.5 h-3.5" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
                         </svg>
-                    </button>
-                    <button @click="remove(subject.id)" class="text-gray-400 hover:text-red-600 p-1" title="Delete">
-                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                  d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
-                        </svg>
-                    </button>
+                        Loading categories…
+                    </div>
+
+                    <!-- Categories loaded -->
+                    <div x-show="!loadingCats[subject.id]">
+
+                        <!-- No categories + no uncategorised = nothing uploaded yet -->
+                        <div x-show="!categories[subject.id]?.length && !(subject.uncategorised_count > 0)"
+                             class="py-2 text-sm text-gray-400 italic">
+                            No categories assigned yet — open a batch review to assign pages to categories.
+                        </div>
+
+                        <!-- Category rows -->
+                        <template x-for="cat in (categories[subject.id] || [])" :key="cat.id">
+                            <a :href="'#review-category/' + cat.id"
+                               class="flex items-center justify-between py-2.5 px-2 -mx-2 rounded-lg border-b border-gray-100 last:border-0
+                                      hover:bg-indigo-50 hover:border-transparent transition-colors cursor-pointer group">
+                                <div class="flex items-center gap-2 min-w-0">
+                                    <span class="w-1.5 h-1.5 rounded-full shrink-0"
+                                          :style="'background-color: ' + (subject.color || '#6366f1')"></span>
+                                    <span class="text-sm font-medium text-gray-700 group-hover:text-indigo-700 truncate"
+                                          x-text="cat.name"></span>
+                                    <span class="text-xs text-gray-400 shrink-0"
+                                          x-text="'(' + (cat.approved_count || 0) + '/' + (cat.question_count || 0) + ' approved)'"></span>
+                                </div>
+                                <svg class="w-4 h-4 text-gray-300 group-hover:text-indigo-500 shrink-0 transition-colors"
+                                     fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                                </svg>
+                            </a>
+                        </template>
+
+                        <!-- Uncategorised row -->
+                        <div x-show="subject.uncategorised_count > 0"
+                             class="flex items-center justify-between py-2"
+                             :class="categories[subject.id]?.length ? 'border-t border-gray-100 mt-1' : ''">
+                            <div class="flex items-center gap-2">
+                                <span class="w-1.5 h-1.5 rounded-full bg-gray-300 shrink-0"></span>
+                                <span class="text-sm text-gray-500 italic">Uncategorised</span>
+                                <span class="text-xs text-gray-400"
+                                      x-text="'(' + subject.uncategorised_count + ' approved)'"></span>
+                            </div>
+                            <a href="#upload-history"
+                               class="text-xs text-gray-400 hover:text-indigo-600 hover:underline ml-3 shrink-0">
+                                Assign via batch review →
+                            </a>
+                        </div>
+
+                        <!-- Link to upload new content for this subject -->
+                        <div class="pt-2 mt-1 border-t border-gray-100">
+                            <a :href="'#upload'" class="text-xs text-indigo-500 hover:text-indigo-700 hover:underline">
+                                + Upload more for <span x-text="subject.name"></span>
+                            </a>
+                        </div>
+                    </div>
                 </div>
             </div>
         </template>

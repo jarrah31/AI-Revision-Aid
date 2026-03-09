@@ -255,6 +255,16 @@ def init_db():
         "ALTER TABLE questions ADD COLUMN fact_checked_at TEXT DEFAULT NULL",
         "ALTER TABLE questions ADD COLUMN category_id INTEGER DEFAULT NULL REFERENCES categories(id) ON DELETE SET NULL",
         "ALTER TABLE questions ADD COLUMN source_context TEXT DEFAULT NULL",
+        # Past paper support
+        "ALTER TABLE upload_batches ADD COLUMN batch_type TEXT NOT NULL DEFAULT 'knowledge_organiser'",
+        "ALTER TABLE upload_batches ADD COLUMN exam_board TEXT DEFAULT NULL",
+        "ALTER TABLE upload_batches ADD COLUMN exam_year INTEGER DEFAULT NULL",
+        "ALTER TABLE upload_batches ADD COLUMN paper_number TEXT DEFAULT NULL",
+        "ALTER TABLE upload_batches ADD COLUMN tier TEXT DEFAULT NULL",
+        "ALTER TABLE questions ADD COLUMN question_source TEXT NOT NULL DEFAULT 'ai_generated'",
+        "ALTER TABLE questions ADD COLUMN question_source_detail TEXT DEFAULT NULL",
+        # question_ref for mark scheme correlation (e.g. "1a", "2(i)")
+        "ALTER TABLE questions ADD COLUMN question_ref TEXT DEFAULT NULL",
     ]:
         try:
             db.execute(migration)

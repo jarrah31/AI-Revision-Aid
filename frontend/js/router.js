@@ -7,6 +7,7 @@ const Router = {
         'upload': '/static/pages/upload.html',
         'processing': '/static/pages/processing.html',
         'review': '/static/pages/review.html',
+        'review-category': '/static/pages/review-category.html',
         'quiz': '/static/pages/quiz.html',
         'dashboard': '/static/pages/dashboard.html',
         'subjects': '/static/pages/subjects.html',

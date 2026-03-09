@@ -114,7 +114,7 @@ def start_quiz(
     if req.mode in ("mcq", "mixed"):
         ensure_mcq_options(selected, db, user["id"])
 
-    # Add MCQ options to questions that have them
+    # Add MCQ options to questions that have them (max 4: 1 correct + 3 distractors)
     for q in selected:
         options = db.execute(
             "SELECT option_text, is_correct FROM mcq_options WHERE question_id = ?",
@@ -122,8 +122,12 @@ def start_quiz(
         ).fetchall()
         if options:
             opts = [dict(o) for o in options]
-            random.shuffle(opts)
-            q["mcq_options"] = opts
+            correct = [o for o in opts if o["is_correct"]]
+            wrong = [o for o in opts if not o["is_correct"]]
+            random.shuffle(wrong)
+            combined = correct + wrong[:3]  # 1 correct + up to 3 distractors = max 4
+            random.shuffle(combined)
+            q["mcq_options"] = combined
         else:
             q["mcq_options"] = []
 

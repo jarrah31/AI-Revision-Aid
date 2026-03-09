@@ -14,12 +14,38 @@ def list_categories(
     user: dict = Depends(get_current_user),
     db: sqlite3.Connection = Depends(get_db),
 ):
-    """List all categories for a subject."""
+    """List all categories for a subject, including per-user question counts."""
     rows = db.execute(
-        "SELECT * FROM categories WHERE subject_id = ? ORDER BY name",
-        (subject_id,),
+        """SELECT c.*,
+                  COUNT(q.id) as question_count,
+                  SUM(CASE WHEN q.approved = 1 THEN 1 ELSE 0 END) as approved_count
+           FROM categories c
+           LEFT JOIN questions q ON q.category_id = c.id AND q.user_id = ?
+           WHERE c.subject_id = ?
+           GROUP BY c.id
+           ORDER BY c.name""",
+        (user["id"], subject_id),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+@router.get("/{category_id}")
+def get_category(
+    category_id: int,
+    user: dict = Depends(get_current_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Get a single category with its subject name."""
+    row = db.execute(
+        """SELECT c.*, s.name as subject_name
+           FROM categories c
+           JOIN subjects s ON s.id = c.subject_id
+           WHERE c.id = ?""",
+        (category_id,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Category not found")
+    return dict(row)
 
 
 @router.post("", status_code=201)

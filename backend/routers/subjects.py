@@ -15,9 +15,10 @@ def list_subjects(
 ):
     rows = db.execute(
         """SELECT s.*,
-                  COUNT(DISTINCT q.id) as question_count
+                  SUM(CASE WHEN q.approved = 1 THEN 1 ELSE 0 END) as question_count,
+                  SUM(CASE WHEN q.approved = 1 AND q.category_id IS NULL THEN 1 ELSE 0 END) as uncategorised_count
            FROM subjects s
-           LEFT JOIN questions q ON q.subject_id = s.id AND q.user_id = ? AND q.approved = 1
+           LEFT JOIN questions q ON q.subject_id = s.id AND q.user_id = ?
            GROUP BY s.id
            ORDER BY s.name""",
         (user["id"],),

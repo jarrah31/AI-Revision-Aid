@@ -5,18 +5,28 @@
     pageEnd: 1,
     isShared: false,
     file: null,
+    msFile: null,
     loading: false,
     loadingSubjects: true,
     error: '',
     newSubject: '',
     showNewSubject: false,
 
+    // Past paper fields
+    batchType: 'knowledge_organiser',
+    examBoard: '',
+    examYear: new Date().getFullYear(),
+    paperNumber: '',
+    tier: 'Higher',
+
+    get isPastPaper() { return this.batchType === 'past_paper'; },
+
     async init() {
         try {
             this.subjects = await API.get('/subjects');
             if (this.subjects.length > 0) this.subjectId = this.subjects[0].id;
         } catch (e) {
-            $store.app.showToast('Failed to load subjects', 'error');
+            Alpine.store('app').showToast('Failed to load subjects', 'error');
         } finally {
             this.loadingSubjects = false;
         }
@@ -24,6 +34,10 @@
 
     onFileChange(event) {
         this.file = event.target.files[0];
+    },
+
+    onMsFileChange(event) {
+        this.msFile = event.target.files[0] || null;
     },
 
     async createSubject() {
@@ -44,6 +58,10 @@
             this.error = 'Please select a file and subject';
             return;
         }
+        if (this.isPastPaper && !this.examBoard) {
+            this.error = 'Please select an exam board for past paper uploads';
+            return;
+        }
         this.error = '';
         this.loading = true;
 
@@ -53,6 +71,15 @@
         formData.append('page_start', this.pageStart);
         formData.append('page_end', this.pageEnd);
         formData.append('is_shared', this.isShared ? 1 : 0);
+        formData.append('batch_type', this.batchType);
+
+        if (this.isPastPaper) {
+            if (this.examBoard)   formData.append('exam_board', this.examBoard);
+            if (this.examYear)    formData.append('exam_year', this.examYear);
+            if (this.paperNumber) formData.append('paper_number', this.paperNumber);
+            if (this.tier)        formData.append('tier', this.tier);
+            if (this.msFile)      formData.append('mark_scheme_file', this.msFile);
+        }
 
         try {
             const res = await API.upload('/upload', formData);
@@ -64,17 +91,104 @@
         }
     }
 }">
-    <h1 class="text-2xl font-bold text-gray-800 mb-6">Upload Knowledge Organiser</h1>
+    <h1 class="text-2xl font-bold text-gray-800 mb-6">Upload</h1>
 
+    <!-- Tip banner -->
+    <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-5 flex gap-3">
+        <span class="text-xl shrink-0 mt-0.5">💡</span>
+        <div>
+            <p class="font-semibold text-amber-800 text-sm">Upload past exam papers first for best results</p>
+            <p class="text-sm text-amber-700 mt-0.5">When you later upload knowledge organisers, RevisionAid automatically uses real exam questions where available — AI only creates questions for topics not covered by past papers.</p>
+        </div>
+    </div>
+
+    <!-- Exam board download links -->
+    <div class="bg-white rounded-xl border border-gray-200 p-4 mb-5">
+        <h3 class="font-semibold text-gray-700 text-sm mb-1 flex items-center gap-1.5">
+            <svg class="w-4 h-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+            Download Past Papers
+            <span class="ml-1 text-xs font-normal text-gray-400 normal-case">(optional - helps provide more relevant questions)</span>
+        </h3>
+        <p class="text-xs text-gray-500 mb-3">If you don't already have a past paper PDF, download one from your exam board below. A <strong>combined Question Paper + Mark Scheme</strong> PDF gives the best results.</p>
+        <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            <a href="https://www.aqa.org.uk/find-past-papers-and-mark-schemes" target="_blank"
+               class="flex items-center justify-between px-3 py-2 rounded-lg border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50 transition-colors group">
+                <span class="text-sm font-semibold text-gray-700 group-hover:text-indigo-700">AQA</span>
+                <svg class="w-3.5 h-3.5 text-gray-300 group-hover:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+            </a>
+            <a href="https://qualifications.pearson.com/en/support/support-topics/exams/past-papers.html" target="_blank"
+               class="flex items-center justify-between px-3 py-2 rounded-lg border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50 transition-colors group">
+                <span class="text-sm font-semibold text-gray-700 group-hover:text-indigo-700">Edexcel</span>
+                <svg class="w-3.5 h-3.5 text-gray-300 group-hover:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+            </a>
+            <a href="https://www.ocr.org.uk/qualifications/past-paper-finder/" target="_blank"
+               class="flex items-center justify-between px-3 py-2 rounded-lg border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50 transition-colors group">
+                <span class="text-sm font-semibold text-gray-700 group-hover:text-indigo-700">OCR</span>
+                <svg class="w-3.5 h-3.5 text-gray-300 group-hover:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+            </a>
+            <a href="https://www.wjec.co.uk/home/past-papers/" target="_blank"
+               class="flex items-center justify-between px-3 py-2 rounded-lg border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50 transition-colors group">
+                <span class="text-sm font-semibold text-gray-700 group-hover:text-indigo-700">WJEC</span>
+                <svg class="w-3.5 h-3.5 text-gray-300 group-hover:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+            </a>
+            <a href="https://ccea.org.uk/regulation/resources/past-papers-mark-schemes" target="_blank"
+               class="flex items-center justify-between px-3 py-2 rounded-lg border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50 transition-colors group">
+                <span class="text-sm font-semibold text-gray-700 group-hover:text-indigo-700">CCEA</span>
+                <svg class="w-3.5 h-3.5 text-gray-300 group-hover:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+            </a>
+            <a href="https://www.physicsandmathstutor.com/past-papers/" target="_blank"
+               class="flex items-center justify-between px-3 py-2 rounded-lg border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50 transition-colors group">
+                <span class="text-sm font-semibold text-gray-700 group-hover:text-indigo-700">PMT</span>
+                <svg class="w-3.5 h-3.5 text-gray-300 group-hover:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+            </a>
+        </div>
+    </div>
+
+    <!-- Upload form -->
     <div class="bg-white rounded-xl shadow-sm p-6 max-w-lg">
         <div x-show="error" class="bg-red-50 text-red-600 text-sm rounded-lg p-3 mb-4" x-text="error"></div>
 
+        <!-- Upload type toggle -->
+        <div class="flex rounded-lg border border-gray-200 p-1 mb-5 bg-gray-50">
+            <button type="button" @click="batchType = 'past_paper'"
+                    :class="isPastPaper ? 'bg-white shadow-sm text-indigo-600 font-semibold' : 'text-gray-500 hover:text-gray-700'"
+                    class="flex-1 py-2 px-3 rounded-md text-sm transition-all flex items-center justify-center gap-1.5">
+                <span>📄</span> Past Exam Paper
+            </button>
+            <button type="button" @click="batchType = 'knowledge_organiser'"
+                    :class="!isPastPaper ? 'bg-white shadow-sm text-indigo-600 font-semibold' : 'text-gray-500 hover:text-gray-700'"
+                    class="flex-1 py-2 px-3 rounded-md text-sm transition-all flex items-center justify-center gap-1.5">
+                <span>📚</span> Knowledge Organiser
+            </button>
+        </div>
+
         <form @submit.prevent="upload()" class="space-y-5">
-            <!-- PDF File -->
-            <div>
-                <label class="block text-sm font-medium text-gray-700 mb-1">PDF File</label>
-                <input type="file" accept=".pdf" @change="onFileChange" required
-                       class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
+            <!-- PDF File(s) -->
+            <div class="space-y-3">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">
+                        <span x-text="isPastPaper ? 'Question Paper PDF' : 'PDF File'"></span>
+                    </label>
+                    <input type="file" accept=".pdf" @change="onFileChange" required
+                           class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
+                </div>
+
+                <!-- Optional mark scheme PDF (past paper mode only) -->
+                <template x-if="isPastPaper">
+                    <div class="pl-4 border-l-2 border-blue-200">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            Mark Scheme PDF
+                            <span class="text-gray-400 font-normal">(optional)</span>
+                        </label>
+                        <input type="file" accept=".pdf" @change="onMsFileChange"
+                               class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
+                        <p class="text-xs text-gray-400 mt-1">
+                            Upload the separate mark scheme PDF — answers will be automatically matched to questions.
+                            <span x-show="!msFile" class="text-gray-400">If omitted, AI-inferred answers are used.</span>
+                            <span x-show="msFile" class="text-blue-600 font-medium">✓ Mark scheme ready</span>
+                        </p>
+                    </div>
+                </template>
             </div>
 
             <!-- Subject -->
@@ -102,6 +216,65 @@
                 </div>
             </div>
 
+            <!-- Past paper metadata (only when batch type = past_paper) -->
+            <template x-if="isPastPaper">
+                <div class="space-y-3 bg-blue-50 rounded-lg p-3 border border-blue-100">
+                    <p class="text-xs font-semibold text-blue-700 uppercase tracking-wide">Exam Paper Details</p>
+                    <div class="grid grid-cols-2 gap-3">
+                        <!-- Exam Board -->
+                        <div>
+                            <label class="block text-xs font-medium text-gray-600 mb-1">Exam Board <span class="text-red-500">*</span></label>
+                            <select x-model="examBoard" required
+                                    class="w-full px-2.5 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white">
+                                <option value="">Select board…</option>
+                                <option value="AQA">AQA</option>
+                                <option value="Edexcel">Edexcel</option>
+                                <option value="OCR">OCR</option>
+                                <option value="WJEC">WJEC</option>
+                                <option value="CCEA">CCEA</option>
+                                <option value="Cambridge">Cambridge (CAIE)</option>
+                                <option value="Other">Other</option>
+                            </select>
+                        </div>
+                        <!-- Year -->
+                        <div>
+                            <label class="block text-xs font-medium text-gray-600 mb-1">Year</label>
+                            <select x-model.number="examYear"
+                                    class="w-full px-2.5 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white">
+                                <template x-for="y in Array.from({length: 10}, (_, i) => new Date().getFullYear() - i)" :key="y">
+                                    <option :value="y" x-text="y"></option>
+                                </template>
+                            </select>
+                        </div>
+                        <!-- Paper Number -->
+                        <div>
+                            <label class="block text-xs font-medium text-gray-600 mb-1">Paper</label>
+                            <select x-model="paperNumber"
+                                    class="w-full px-2.5 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white">
+                                <option value="">Select…</option>
+                                <option value="Paper 1">Paper 1</option>
+                                <option value="Paper 2">Paper 2</option>
+                                <option value="Paper 3">Paper 3</option>
+                                <option value="Paper 4">Paper 4</option>
+                                <option value="Unit 1">Unit 1</option>
+                                <option value="Unit 2">Unit 2</option>
+                                <option value="Unit 3">Unit 3</option>
+                            </select>
+                        </div>
+                        <!-- Tier -->
+                        <div>
+                            <label class="block text-xs font-medium text-gray-600 mb-1">Tier</label>
+                            <select x-model="tier"
+                                    class="w-full px-2.5 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white">
+                                <option value="Higher">Higher</option>
+                                <option value="Foundation">Foundation</option>
+                                <option value="N/A">N/A (not tiered)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </template>
+
             <!-- Page Range -->
             <div class="grid grid-cols-2 gap-4">
                 <div>
@@ -128,8 +301,8 @@
             <!-- Submit -->
             <button type="submit" :disabled="loading || !file"
                     class="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 transition">
-                <span x-show="!loading">Upload & Process</span>
-                <span x-show="loading">Uploading...</span>
+                <span x-show="!loading" x-text="isPastPaper ? '📄 Upload Past Paper' : '📚 Upload & Process'"></span>
+                <span x-show="loading">Uploading…</span>
             </button>
         </form>
     </div>

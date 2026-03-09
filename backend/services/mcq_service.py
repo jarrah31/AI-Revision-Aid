@@ -49,7 +49,7 @@ def ensure_mcq_options(questions: list[dict], db: sqlite3.Connection, user_id: i
                         "INSERT OR IGNORE INTO mcq_options (question_id, option_text, is_correct) VALUES (?, ?, 1)",
                         (qid, q_match["answer_text"]),
                     )
-                    for distractor in result.get("distractors", []):
+                    for distractor in result.get("distractors", [])[:3]:  # cap at 3 wrong answers
                         db.execute(
                             "INSERT OR IGNORE INTO mcq_options (question_id, option_text, is_correct) VALUES (?, ?, 0)",
                             (qid, distractor),
