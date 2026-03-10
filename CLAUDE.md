@@ -29,6 +29,7 @@ Card labels come from `_AI_SETTING_METADATA` dict in `backend/routers/admin.py`.
    - `v1.1` (two-part) will NOT trigger the workflow — always use `v1.1.0`
 3. GitHub Actions (`publish.yml`) builds multi-platform image (amd64 + arm64) and pushes to `ghcr.io/jarrah31/ai-revision-aid`
 4. **Never build Docker images locally** — Actions handles it; monitor with `gh run list`
+5. **Always update `APP_VERSION` in `backend/app.py`** to match the new tag before committing and tagging — this is what the home page displays.
 
 ## Git Remote
 GitHub: `https://github.com/jarrah31/AI-Revision-Aid.git` (not Bitbucket)
