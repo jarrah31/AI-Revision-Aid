@@ -199,6 +199,7 @@ def process_batch(
     batch_type: str = "knowledge_organiser",
     ms_pdf_path: str | None = None,
     blend_past_papers: bool = True,
+    category_id: int | None = None,
 ):
     """Background task: process PDF pages through Claude and store results."""
     db = sqlite3.connect(str(DB_PATH))
@@ -310,14 +311,15 @@ def process_batch(
 
                     db.execute(
                         """INSERT INTO questions
-                           (batch_id, user_id, subject_id, page_number, question_text,
+                           (batch_id, user_id, subject_id, category_id, page_number, question_text,
                             answer_text, question_type, difficulty, image_id, source_context,
                             question_source, question_ref)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (
                             batch_id,
                             user_id,
                             subject_id,
+                            category_id,
                             display_page,
                             q.get("question", ""),
                             q.get("answer", ""),
@@ -406,6 +408,7 @@ async def upload_pdf(
     is_shared: int = Form(0),
     batch_type: str = Form("knowledge_organiser"),
     blend_past_papers: int = Form(1),
+    category_id: int | None = Form(None),
     exam_board: str | None = Form(None),
     exam_year: int | None = Form(None),
     paper_number: str | None = Form(None),
@@ -440,11 +443,11 @@ async def upload_pdf(
     # Create batch record first to get ID
     cursor = db.execute(
         """INSERT INTO upload_batches
-           (user_id, subject_id, filename, pdf_path, page_start, page_end,
+           (user_id, subject_id, category_id, filename, pdf_path, page_start, page_end,
             total_pages, is_shared, status, batch_type, exam_board, exam_year, paper_number, tier)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)""",
         (
-            user["id"], subject_id, file.filename, "", page_start, page_end,
+            user["id"], subject_id, category_id, file.filename, "", page_start, page_end,
             page_end - page_start + 1, is_shared,
             batch_type,
             exam_board if batch_type == "past_paper" else None,
@@ -503,6 +506,7 @@ async def upload_pdf(
         batch_type,
         ms_pdf_path_str,
         bool(blend_past_papers),
+        category_id,
     )
 
     return {

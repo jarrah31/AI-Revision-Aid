@@ -11,6 +11,11 @@
     error: '',
     newSubject: '',
     showNewSubject: false,
+    categoryId: null,
+    categories: [],
+    loadingCategories: false,
+    newCategory: '',
+    showNewCategory: false,
 
     // Past paper fields
     batchType: 'knowledge_organiser',
@@ -31,6 +36,24 @@
         } finally {
             this.loadingSubjects = false;
         }
+        if (this.subjectId) await this.loadCategories();
+        this.$watch('subjectId', async () => {
+            this.categoryId = null;
+            this.showNewCategory = false;
+            await this.loadCategories();
+        });
+    },
+
+    async loadCategories() {
+        if (!this.subjectId) { this.categories = []; return; }
+        this.loadingCategories = true;
+        try {
+            this.categories = await API.get('/categories?subject_id=' + this.subjectId);
+        } catch (e) {
+            this.categories = [];
+        } finally {
+            this.loadingCategories = false;
+        }
     },
 
     onFileChange(event) {
@@ -39,6 +62,19 @@
 
     onMsFileChange(event) {
         this.msFile = event.target.files[0] || null;
+    },
+
+    async createCategory() {
+        if (!this.newCategory.trim()) return;
+        try {
+            const res = await API.post('/categories', { name: this.newCategory.trim(), subject_id: this.subjectId });
+            this.categories.push(res);
+            this.categoryId = res.id;
+            this.newCategory = '';
+            this.showNewCategory = false;
+        } catch (e) {
+            this.error = e.message;
+        }
     },
 
     async createSubject() {
@@ -69,6 +105,7 @@
         const formData = new FormData();
         formData.append('file', this.file);
         formData.append('subject_id', this.subjectId);
+        if (this.categoryId) formData.append('category_id', this.categoryId);
         formData.append('page_start', this.pageStart);
         formData.append('page_end', this.pageEnd);
         formData.append('is_shared', this.isShared ? 1 : 0);
@@ -216,6 +253,35 @@
                     <button type="button" @click="createSubject()"
                             class="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700">Add</button>
                     <button type="button" @click="showNewSubject = false"
+                            class="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm hover:bg-gray-200">Cancel</button>
+                </div>
+            </div>
+
+            <!-- Category (optional) -->
+            <div x-show="subjectId">
+                <label class="block text-sm font-medium text-gray-700 mb-1">
+                    Category
+                    <span class="text-gray-400 font-normal">(optional)</span>
+                </label>
+                <div x-show="!showNewCategory">
+                    <select x-model.number="categoryId"
+                            class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                        <option :value="null">— No category —</option>
+                        <template x-for="c in categories" :key="c.id">
+                            <option :value="c.id" x-text="c.name"></option>
+                        </template>
+                    </select>
+                    <button type="button" @click="showNewCategory = true"
+                            class="text-sm text-indigo-600 mt-1 hover:underline">
+                        + Create new category
+                    </button>
+                </div>
+                <div x-show="showNewCategory" class="flex gap-2">
+                    <input x-model="newCategory" type="text" placeholder="Category name"
+                           class="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                    <button type="button" @click="createCategory()"
+                            class="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700">Add</button>
+                    <button type="button" @click="showNewCategory = false; newCategory = ''"
                             class="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm hover:bg-gray-200">Cancel</button>
                 </div>
             </div>
