@@ -25,7 +25,7 @@ Alpine.data('profilePage', () => ({
             this.display_name = this.user.display_name || '';
             this.year_group = this.user.year_group || 9;
         } catch (e) {
-            this.user = $store.app.user;
+            this.user = Alpine.store('app').user;
         }
         this.loadCosts();
     },
@@ -47,7 +47,8 @@ Alpine.data('profilePage', () => ({
             if (this.display_name) body.display_name = this.display_name;
             if (this.year_group) body.year_group = parseInt(this.year_group);
             await API.put('/auth/profile', body);
-            $store.app.user = { ...$store.app.user, display_name: this.display_name, year_group: parseInt(this.year_group) };
+            const appStore = Alpine.store('app');
+            appStore.user = { ...appStore.user, display_name: this.display_name, year_group: parseInt(this.year_group) };
             this.profileMsg = 'Profile updated successfully.';
         } catch (e) {
             this.profileErr = e.message;

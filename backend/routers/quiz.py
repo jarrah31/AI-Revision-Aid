@@ -19,6 +19,7 @@ class QuizStartRequest(BaseModel):
     category_id: int | None = None
     count: int = 20
     mode: str = "mixed"  # flashcard, mcq, typed, mixed
+    question_sources: list[str] | None = None  # e.g. ['ai_generated'], ['past_paper'], None = all
 
 
 class AnswerRequest(BaseModel):
@@ -27,6 +28,32 @@ class AnswerRequest(BaseModel):
     student_answer: str | None = None
     quality_rating: int | None = None  # for flashcard self-rating
     time_taken_ms: int | None = None
+
+
+@router.get("/count")
+def get_question_count(
+    subject_id: int | None = Query(None),
+    category_id: int | None = Query(None),
+    question_sources: list[str] | None = Query(None),
+    user: dict = Depends(get_current_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Return the total number of approved questions matching the given filters."""
+    conditions = ["q.user_id = ?", "q.approved = 1"]
+    params: list = [user["id"]]
+    if subject_id:
+        conditions.append("q.subject_id = ?")
+        params.append(subject_id)
+    if category_id:
+        conditions.append("q.category_id = ?")
+        params.append(category_id)
+    if question_sources:
+        placeholders = ",".join("?" * len(question_sources))
+        conditions.append(f"q.question_source IN ({placeholders})")
+        params.extend(question_sources)
+    where = " AND ".join(conditions)
+    row = db.execute(f"SELECT COUNT(*) FROM questions q WHERE {where}", params).fetchone()
+    return {"count": row[0]}
 
 
 @router.post("/start")
@@ -46,6 +73,10 @@ def start_quiz(
     if req.category_id:
         conditions.append("q.category_id = ?")
         params.append(req.category_id)
+    if req.question_sources:
+        placeholders = ",".join("?" * len(req.question_sources))
+        conditions.append(f"q.question_source IN ({placeholders})")
+        params.extend(req.question_sources)
     where = " AND ".join(conditions)
 
     # 1. Overdue cards

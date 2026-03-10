@@ -14,6 +14,7 @@
 
     // Past paper fields
     batchType: 'knowledge_organiser',
+    blendPastPapers: false,
     examBoard: '',
     examYear: new Date().getFullYear(),
     paperNumber: '',
@@ -72,6 +73,9 @@
         formData.append('page_end', this.pageEnd);
         formData.append('is_shared', this.isShared ? 1 : 0);
         formData.append('batch_type', this.batchType);
+        if (!this.isPastPaper) {
+            formData.append('blend_past_papers', this.blendPastPapers ? '1' : '0');
+        }
 
         if (this.isPastPaper) {
             if (this.examBoard)   formData.append('exam_board', this.examBoard);
@@ -215,6 +219,27 @@
                             class="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm hover:bg-gray-200">Cancel</button>
                 </div>
             </div>
+
+            <!-- KO blend option (only when batch type = knowledge_organiser) -->
+            <template x-if="!isPastPaper">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Question source</label>
+                    <div class="flex rounded-lg border border-gray-200 p-1 bg-gray-50">
+                        <button type="button" @click="blendPastPapers = false"
+                                :class="!blendPastPapers ? 'bg-white shadow-sm text-indigo-600 font-semibold' : 'text-gray-500 hover:text-gray-700'"
+                                class="flex-1 py-1.5 px-3 rounded-md text-sm transition-all">
+                            AI Only
+                        </button>
+                        <button type="button" @click="blendPastPapers = true"
+                                :class="blendPastPapers ? 'bg-white shadow-sm text-indigo-600 font-semibold' : 'text-gray-500 hover:text-gray-700'"
+                                class="flex-1 py-1.5 px-3 rounded-md text-sm transition-all">
+                            Blend with Past Papers
+                        </button>
+                    </div>
+                    <p class="text-xs text-gray-400 mt-1.5"
+                       x-text="blendPastPapers ? 'AI questions will be replaced by matching past paper questions where available.' : 'All questions will be generated purely by AI — past papers are ignored.'"></p>
+                </div>
+            </template>
 
             <!-- Past paper metadata (only when batch type = past_paper) -->
             <template x-if="isPastPaper">

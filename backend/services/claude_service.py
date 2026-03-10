@@ -122,7 +122,7 @@ def extract_qa_from_page(image_b64: str, subject: str) -> tuple[dict, dict]:
 
     message = client.messages.create(
         model=model,
-        max_tokens=4096,
+        max_tokens=8192,
         messages=[{
             "role": "user",
             "content": [
@@ -131,6 +131,8 @@ def extract_qa_from_page(image_b64: str, subject: str) -> tuple[dict, dict]:
             ],
         }],
     )
+    if message.stop_reason == "max_tokens":
+        raise ValueError("Claude response was truncated (page too dense — try splitting into smaller page ranges)")
     return json.loads(_strip_fences(message.content[0].text)), _calc_usage(message, model)
 
 
@@ -145,7 +147,7 @@ def extract_qa_from_past_paper(image_b64: str, subject: str) -> tuple[dict, dict
 
     message = client.messages.create(
         model=model,
-        max_tokens=4096,
+        max_tokens=8192,
         messages=[{
             "role": "user",
             "content": [
@@ -154,7 +156,82 @@ def extract_qa_from_past_paper(image_b64: str, subject: str) -> tuple[dict, dict
             ],
         }],
     )
+    if message.stop_reason == "max_tokens":
+        raise ValueError("Claude response was truncated (page too dense — try splitting into smaller page ranges)")
     return json.loads(_strip_fences(message.content[0].text)), _calc_usage(message, model)
+
+
+_SECTION_DETECT_PROMPT = """Identify the distinct visual sections on this knowledge organiser page.
+A section is a self-contained region with its own heading or topic area.
+
+Return JSON:
+{"sections": [{"bbox_x_pct": 0.0, "bbox_y_pct": 0.0, "bbox_w_pct": 100.0, "bbox_h_pct": 45.0}]}
+
+Rules:
+- bbox values are percentages of full page dimensions (0–100)
+- aim for 2–6 non-overlapping sections that follow the visible layout
+- if the page has only one topic, return a single entry covering the full page
+- return ONLY valid JSON"""
+
+_HALF_SPLIT = [
+    {"bbox_x_pct": 0, "bbox_y_pct":  0, "bbox_w_pct": 100, "bbox_h_pct": 50},
+    {"bbox_x_pct": 0, "bbox_y_pct": 50, "bbox_w_pct": 100, "bbox_h_pct": 50},
+]
+
+
+def detect_page_sections(image_b64: str) -> list[dict]:
+    """Detect distinct visual sections on a KO page. Returns list of bbox dicts."""
+    client = get_client()
+    message = client.messages.create(
+        model=QUIZ_MODEL,
+        max_tokens=512,
+        messages=[{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": image_b64}},
+            {"type": "text", "text": _SECTION_DETECT_PROMPT},
+        ]}],
+    )
+    try:
+        return json.loads(_strip_fences(message.content[0].text)).get("sections", [])
+    except Exception:
+        return []
+
+
+def extract_qa_from_page_with_fallback(png_bytes: bytes, subject: str) -> tuple[dict, dict]:
+    """Extract Q&A from a KO page, auto-splitting into sections if the response is truncated."""
+    from backend.services.pdf_processor import png_to_base64, crop_section_to_bytes
+
+    image_b64 = png_to_base64(png_bytes)
+    try:
+        return extract_qa_from_page(image_b64, subject)
+    except (ValueError, json.JSONDecodeError):
+        pass  # response truncated or malformed — try section splitting
+
+    sections = detect_page_sections(image_b64)
+    if len(sections) <= 1:
+        sections = _HALF_SPLIT  # simple fallback if detection finds nothing useful
+
+    all_questions: list = []
+    all_images: list = []
+    total_usage: dict = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+
+    for sec in sections:
+        sec_png = crop_section_to_bytes(
+            png_bytes,
+            sec["bbox_x_pct"], sec["bbox_y_pct"],
+            sec["bbox_w_pct"], sec["bbox_h_pct"],
+        )
+        sec_b64 = png_to_base64(sec_png)
+        try:
+            sec_result, sec_usage = extract_qa_from_page(sec_b64, subject)
+        except (ValueError, json.JSONDecodeError):
+            continue  # skip sections that still fail
+        all_questions.extend(sec_result.get("questions", []))
+        all_images.extend(sec_result.get("images", []))
+        total_usage["input_tokens"] += sec_usage["input_tokens"]
+        total_usage["output_tokens"] += sec_usage["output_tokens"]
+        total_usage["cost_usd"] += sec_usage["cost_usd"]
+
+    return {"questions": all_questions, "images": all_images}, total_usage
 
 
 def generate_mcq_distractors(questions: list[dict], subject: str) -> tuple[list, dict]:

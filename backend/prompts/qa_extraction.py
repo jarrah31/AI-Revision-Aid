@@ -31,7 +31,10 @@ Return your response as JSON with this exact structure:
 }}
 
 Rules:
-- Generate 5-15 questions per page depending on content density.
+- Generate up to 30 questions per page. If there are more than 30 facts, select the 30 most important and clearly-stated ones — prioritise key definitions, core facts, and named concepts.
+- Every question and answer must be directly based on text that is explicitly written on the page. Do not infer, extrapolate, or use outside knowledge — if it is not stated on the page, do not create a question about it.
+- Questions must be simple, specific, and unambiguous. A student should immediately understand what fact is being asked. Avoid wordy, compound, or vague phrasing — one clear question, one clear answer.
+- Do not create multiple questions that have the same answer.
 - For tables, create questions about specific rows/values.
 - For diagrams, create questions that require understanding the visual. Set related_image_index to the 0-based index in the images array.
 - For definitions, create "What is...?" style questions.

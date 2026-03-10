@@ -61,6 +61,27 @@ def crop_image_region(
     return f"batch_{batch_id}/{filename}", cropped.width, cropped.height
 
 
+def crop_section_to_bytes(
+    png_bytes: bytes,
+    bbox_x_pct: float,
+    bbox_y_pct: float,
+    bbox_w_pct: float,
+    bbox_h_pct: float,
+    padding_pct: float = 1.0,
+) -> bytes:
+    """Crop a section from a page PNG and return PNG bytes (not saved to disk)."""
+    img = Image.open(io.BytesIO(png_bytes))
+    w, h = img.size
+    x1 = max(0, int((bbox_x_pct - padding_pct) / 100 * w))
+    y1 = max(0, int((bbox_y_pct - padding_pct) / 100 * h))
+    x2 = min(w, int((bbox_x_pct + bbox_w_pct + padding_pct) / 100 * w))
+    y2 = min(h, int((bbox_y_pct + bbox_h_pct + padding_pct) / 100 * h))
+    cropped = img.crop((x1, y1, x2, y2))
+    buf = io.BytesIO()
+    cropped.save(buf, "PNG", optimize=True)
+    return buf.getvalue()
+
+
 def png_to_base64(png_bytes: bytes) -> str:
     """Encode PNG bytes to base64 string for Claude API."""
     return base64.standard_b64encode(png_bytes).decode("utf-8")

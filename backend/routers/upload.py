@@ -15,7 +15,7 @@ from backend.services.pdf_processor import (
     get_pdf_page_count,
 )
 from backend.services.claude_service import (
-    extract_qa_from_page,
+    extract_qa_from_page_with_fallback,
     extract_qa_from_past_paper,
     match_ko_to_past_papers,
 )
@@ -198,6 +198,7 @@ def process_batch(
     page_end: int,
     batch_type: str = "knowledge_organiser",
     ms_pdf_path: str | None = None,
+    blend_past_papers: bool = True,
 ):
     """Background task: process PDF pages through Claude and store results."""
     db = sqlite3.connect(str(DB_PATH))
@@ -225,7 +226,7 @@ def process_batch(
                 image_b64 = png_to_base64(png_bytes)
 
                 if batch_type == "past_paper":
-                    result, usage = extract_qa_from_past_paper(image_b64, subject_name)
+                    result, usage = extract_qa_from_past_paper(image_b64, subject_name)  # noqa: past papers don't need section splitting
                     page_type = result.get("page_type", "cover")
 
                     # Collect any mark scheme answers from this page (combined or MS section)
@@ -253,7 +254,7 @@ def process_batch(
 
                     question_source = "past_paper"
                 else:
-                    result, usage = extract_qa_from_page(image_b64, subject_name)
+                    result, usage = extract_qa_from_page_with_fallback(png_bytes, subject_name)
                     question_source = "ai_generated"
 
                 # Record API usage for this page
@@ -366,7 +367,7 @@ def process_batch(
                     print(f"Mark scheme processing failed (non-fatal): {e}")
                     traceback.print_exc()
 
-        elif batch_type == "knowledge_organiser":
+        elif batch_type == "knowledge_organiser" and blend_past_papers:
             # Replace AI questions with past paper equivalents where found
             try:
                 _match_and_replace_with_past_papers(batch_id, user_id, subject_id, db)
@@ -404,6 +405,7 @@ async def upload_pdf(
     page_end: int = Form(...),
     is_shared: int = Form(0),
     batch_type: str = Form("knowledge_organiser"),
+    blend_past_papers: int = Form(1),
     exam_board: str | None = Form(None),
     exam_year: int | None = Form(None),
     paper_number: str | None = Form(None),
@@ -500,6 +502,7 @@ async def upload_pdf(
         page_end,
         batch_type,
         ms_pdf_path_str,
+        bool(blend_past_papers),
     )
 
     return {
