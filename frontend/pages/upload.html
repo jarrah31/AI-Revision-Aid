@@ -69,23 +69,11 @@
         this.msFile = event.target.files[0] || null;
     },
 
-    async onImageFilesChange(event) {
+    onImageFilesChange(event) {
         const newFiles = Array.from(event.target.files);
         for (const f of newFiles) {
             this.imageFiles.push(f);
-            const isHeic = /\.(heic|heif)$/i.test(f.name) || f.type === 'image/heic' || f.type === 'image/heif';
-            if (isHeic && typeof heic2any !== 'undefined') {
-                try {
-                    const converted = await heic2any({ blob: f, toType: 'image/jpeg', quality: 0.8 });
-                    const blob = Array.isArray(converted) ? converted[0] : converted;
-                    this.imagePreviews.push(URL.createObjectURL(blob));
-                } catch (e) {
-                    console.warn('HEIC preview conversion failed:', e);
-                    this.imagePreviews.push('');
-                }
-            } else {
-                this.imagePreviews.push(URL.createObjectURL(f));
-            }
+            this.imagePreviews.push(URL.createObjectURL(f));
         }
         event.target.value = '';
     },
@@ -94,6 +82,11 @@
         URL.revokeObjectURL(this.imagePreviews[index]);
         this.imageFiles.splice(index, 1);
         this.imagePreviews.splice(index, 1);
+    },
+
+    markPreviewFailed(index) {
+        URL.revokeObjectURL(this.imagePreviews[index]);
+        this.imagePreviews.splice(index, 1, '');
     },
 
     switchUploadType(type) {
@@ -330,6 +323,7 @@
                         <template x-for="(preview, i) in imagePreviews" :key="i">
                             <div class="relative group">
                                 <img x-show="preview" :src="preview"
+                                     @error="markPreviewFailed(i)"
                                      class="w-full h-16 object-cover rounded-lg border border-gray-200">
                                 <div x-show="!preview"
                                      class="w-full h-16 flex items-center justify-center rounded-lg border border-dashed border-gray-300 bg-gray-50 text-gray-400 text-xl">🖼️</div>
