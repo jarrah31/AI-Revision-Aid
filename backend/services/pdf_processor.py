@@ -93,3 +93,18 @@ def get_pdf_page_count(pdf_path: str) -> int:
     count = len(doc)
     doc.close()
     return count
+
+
+def load_image_as_png_bytes(image_path: Path) -> bytes:
+    """Load any supported image file (JPG, PNG, WEBP, GIF) and return as PNG bytes."""
+    img = Image.open(image_path)
+    if img.mode == "RGBA":
+        # Flatten alpha onto white background
+        background = Image.new("RGB", img.size, (255, 255, 255))
+        background.paste(img, mask=img.split()[3])
+        img = background
+    elif img.mode not in ("RGB", "L"):
+        img = img.convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, "PNG", optimize=True)
+    return buf.getvalue()

@@ -1,9 +1,10 @@
+import re
 import sqlite3
 import json
 import traceback
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks
-from typing import Optional
+from typing import Optional, List
 
 from backend.auth import get_current_user
 from backend.database import get_db, DB_PATH
@@ -13,6 +14,7 @@ from backend.services.pdf_processor import (
     crop_image_region,
     png_to_base64,
     get_pdf_page_count,
+    load_image_as_png_bytes,
 )
 from backend.services.claude_service import (
     extract_qa_from_page_with_fallback,
@@ -200,8 +202,9 @@ def process_batch(
     ms_pdf_path: str | None = None,
     blend_past_papers: bool = True,
     category_id: int | None = None,
+    source_type: str = "pdf",
 ):
-    """Background task: process PDF pages through Claude and store results."""
+    """Background task: process PDF pages (or uploaded images) through Claude and store results."""
     db = sqlite3.connect(str(DB_PATH))
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys=ON")
@@ -213,14 +216,27 @@ def process_batch(
         )
         db.commit()
 
+        # For image uploads, discover the saved files and override page range
+        saved_images: list[Path] = []
+        if source_type == "images":
+            saved_images = sorted(
+                (DATA_DIR / "pdfs").glob(f"batch_{batch_id}_img_*"),
+                key=lambda p: int(re.search(r"_img_(\d+)", p.name).group(1)),
+            )
+            page_start = 1
+            page_end = len(saved_images)
+
         # Collect mark scheme answers found inline (combined Q+MS pages or mark scheme sections)
         ms_answers_inline: dict[str, str] = {}
 
         for page_num in range(page_start - 1, page_end):  # 0-indexed
             display_page = page_num + 1
             try:
-                # Render page to PNG
-                png_bytes = render_page_to_png(pdf_path, page_num)
+                # Get PNG bytes — from uploaded image file or rendered PDF page
+                if source_type == "images":
+                    png_bytes = load_image_as_png_bytes(saved_images[page_num])
+                else:
+                    png_bytes = render_page_to_png(pdf_path, page_num)
                 save_full_page_image(batch_id, display_page, png_bytes)
 
                 # Send to Claude — different extraction for past papers vs KO
@@ -398,13 +414,17 @@ def process_batch(
         db.close()
 
 
+_ALLOWED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+
+
 @router.post("")
 async def upload_pdf(
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
+    file: Optional[UploadFile] = File(None),
+    images: List[UploadFile] = File(default=[]),
     subject_id: int = Form(...),
-    page_start: int = Form(...),
-    page_end: int = Form(...),
+    page_start: int = Form(1),
+    page_end: int = Form(1),
     is_shared: int = Form(0),
     batch_type: str = Form("knowledge_organiser"),
     blend_past_papers: int = Form(1),
@@ -417,15 +437,30 @@ async def upload_pdf(
     user: dict = Depends(get_current_user),
     db: sqlite3.Connection = Depends(get_db),
 ):
-    if not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are accepted")
+    # Determine source type: images take precedence over PDF
+    valid_images = [img for img in images if img and img.filename]
+    source_type = "images" if valid_images else "pdf"
+
+    if source_type == "pdf":
+        if not file or not file.filename:
+            raise HTTPException(status_code=400, detail="A PDF file is required")
+        if not file.filename.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="Only PDF files are accepted")
+    else:
+        for img in valid_images:
+            ext = Path(img.filename).suffix.lower()
+            if ext not in _ALLOWED_IMAGE_EXTS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported image format: {img.filename}. Use JPG, PNG, GIF, or WEBP.",
+                )
 
     # Validate batch_type
     if batch_type not in ("knowledge_organiser", "past_paper"):
         batch_type = "knowledge_organiser"
 
-    # Validate mark scheme file if provided
-    if mark_scheme_file and mark_scheme_file.filename:
+    # Validate mark scheme file (PDF uploads only)
+    if source_type == "pdf" and mark_scheme_file and mark_scheme_file.filename:
         if not mark_scheme_file.filename.lower().endswith(".pdf"):
             raise HTTPException(status_code=400, detail="Mark scheme must be a PDF file")
     else:
@@ -436,20 +471,28 @@ async def upload_pdf(
     if not subject:
         raise HTTPException(status_code=404, detail="Subject not found")
 
-    # Save PDF
     pdf_dir = DATA_DIR / "pdfs"
     pdf_dir.mkdir(parents=True, exist_ok=True)
+
+    # For image uploads derive page range from image count
+    if source_type == "images":
+        page_start = 1
+        page_end = len(valid_images)
+        filename = valid_images[0].filename if len(valid_images) == 1 else f"{len(valid_images)} images"
+    else:
+        filename = file.filename
 
     # Create batch record first to get ID
     cursor = db.execute(
         """INSERT INTO upload_batches
            (user_id, subject_id, category_id, filename, pdf_path, page_start, page_end,
-            total_pages, is_shared, status, batch_type, exam_board, exam_year, paper_number, tier)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)""",
+            total_pages, is_shared, status, batch_type, source_type,
+            exam_board, exam_year, paper_number, tier)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)""",
         (
-            user["id"], subject_id, category_id, file.filename, "", page_start, page_end,
+            user["id"], subject_id, category_id, filename, "", page_start, page_end,
             page_end - page_start + 1, is_shared,
-            batch_type,
+            batch_type, source_type,
             exam_board if batch_type == "past_paper" else None,
             exam_year if batch_type == "past_paper" else None,
             paper_number if batch_type == "past_paper" else None,
@@ -459,45 +502,64 @@ async def upload_pdf(
     db.commit()
     batch_id = cursor.lastrowid
 
-    # Save question paper PDF
-    qp_pdf_path = pdf_dir / f"batch_{batch_id}.pdf"
-    content = await file.read()
-    qp_pdf_path.write_bytes(content)
-
-    # Save mark scheme PDF (if provided)
     ms_pdf_path_str: str | None = None
-    if mark_scheme_file and batch_type == "past_paper":
-        ms_content = await mark_scheme_file.read()
-        if ms_content:
-            ms_pdf_path = pdf_dir / f"batch_{batch_id}_ms.pdf"
-            ms_pdf_path.write_bytes(ms_content)
-            ms_pdf_path_str = str(ms_pdf_path)
 
-    # Update PDF path in record
-    db.execute(
-        "UPDATE upload_batches SET pdf_path = ? WHERE id = ?",
-        (f"batch_{batch_id}.pdf", batch_id),
-    )
-    db.commit()
+    if source_type == "pdf":
+        # Save question paper PDF
+        qp_pdf_path = pdf_dir / f"batch_{batch_id}.pdf"
+        content = await file.read()
+        qp_pdf_path.write_bytes(content)
 
-    # Validate page range
-    total_pages = get_pdf_page_count(str(qp_pdf_path))
-    if page_start < 1 or page_end > total_pages or page_start > page_end:
-        db.execute("DELETE FROM upload_batches WHERE id = ?", (batch_id,))
-        db.commit()
-        qp_pdf_path.unlink(missing_ok=True)
-        if ms_pdf_path_str:
-            Path(ms_pdf_path_str).unlink(missing_ok=True)
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid page range. PDF has {total_pages} pages.",
+        # Save mark scheme PDF (if provided)
+        if mark_scheme_file and batch_type == "past_paper":
+            ms_content = await mark_scheme_file.read()
+            if ms_content:
+                ms_pdf_path = pdf_dir / f"batch_{batch_id}_ms.pdf"
+                ms_pdf_path.write_bytes(ms_content)
+                ms_pdf_path_str = str(ms_pdf_path)
+
+        # Update PDF path in record
+        db.execute(
+            "UPDATE upload_batches SET pdf_path = ? WHERE id = ?",
+            (f"batch_{batch_id}.pdf", batch_id),
         )
+        db.commit()
+
+        # Validate page range
+        total_pages = get_pdf_page_count(str(qp_pdf_path))
+        if page_start < 1 or page_end > total_pages or page_start > page_end:
+            db.execute("DELETE FROM upload_batches WHERE id = ?", (batch_id,))
+            db.commit()
+            qp_pdf_path.unlink(missing_ok=True)
+            if ms_pdf_path_str:
+                Path(ms_pdf_path_str).unlink(missing_ok=True)
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid page range. PDF has {total_pages} pages.",
+            )
+
+        pdf_path_for_task = str(qp_pdf_path)
+    else:
+        # Save each uploaded image as batch_{id}_img_{n}.{ext}
+        for i, img in enumerate(valid_images, start=1):
+            ext = Path(img.filename).suffix.lower()
+            img_save_path = pdf_dir / f"batch_{batch_id}_img_{i}{ext}"
+            content = await img.read()
+            img_save_path.write_bytes(content)
+
+        db.execute(
+            "UPDATE upload_batches SET pdf_path = 'images' WHERE id = ?",
+            (batch_id,),
+        )
+        db.commit()
+
+        pdf_path_for_task = ""
 
     # Kick off background processing
     background_tasks.add_task(
         process_batch,
         batch_id,
-        str(qp_pdf_path),
+        pdf_path_for_task,
         subject["name"],
         subject_id,
         user["id"],
@@ -507,12 +569,14 @@ async def upload_pdf(
         ms_pdf_path_str,
         bool(blend_past_papers),
         category_id,
+        source_type,
     )
 
     return {
         "batch_id": batch_id,
         "total_pages": page_end - page_start + 1,
         "has_mark_scheme": ms_pdf_path_str is not None,
+        "source_type": source_type,
     }
 
 

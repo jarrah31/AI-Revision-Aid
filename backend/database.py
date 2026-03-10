@@ -266,6 +266,8 @@ def init_db():
         # question_ref for mark scheme correlation (e.g. "1a", "2(i)")
         "ALTER TABLE questions ADD COLUMN question_ref TEXT DEFAULT NULL",
         "ALTER TABLE upload_batches ADD COLUMN category_id INTEGER DEFAULT NULL REFERENCES categories(id) ON DELETE SET NULL",
+        # Image upload support
+        "ALTER TABLE upload_batches ADD COLUMN source_type TEXT NOT NULL DEFAULT 'pdf'",
     ]:
         try:
             db.execute(migration)

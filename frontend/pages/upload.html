@@ -17,6 +17,11 @@
     newCategory: '',
     showNewCategory: false,
 
+    // File type: pdf or images
+    uploadType: 'pdf',
+    imageFiles: [],
+    imagePreviews: [],
+
     // Past paper fields
     batchType: 'knowledge_organiser',
     blendPastPapers: false,
@@ -64,6 +69,32 @@
         this.msFile = event.target.files[0] || null;
     },
 
+    onImageFilesChange(event) {
+        const newFiles = Array.from(event.target.files);
+        for (const f of newFiles) {
+            this.imageFiles.push(f);
+            this.imagePreviews.push(URL.createObjectURL(f));
+        }
+        event.target.value = '';
+    },
+
+    removeImage(index) {
+        URL.revokeObjectURL(this.imagePreviews[index]);
+        this.imageFiles.splice(index, 1);
+        this.imagePreviews.splice(index, 1);
+    },
+
+    switchUploadType(type) {
+        this.uploadType = type;
+        if (type === 'images') {
+            this.file = null;
+        } else {
+            for (const url of this.imagePreviews) URL.revokeObjectURL(url);
+            this.imageFiles = [];
+            this.imagePreviews = [];
+        }
+    },
+
     async createCategory() {
         if (!this.newCategory.trim()) return;
         try {
@@ -91,9 +122,16 @@
     },
 
     async upload() {
-        if (!this.file || !this.subjectId) {
-            this.error = 'Please select a file and subject';
-            return;
+        if (this.uploadType === 'pdf') {
+            if (!this.file || !this.subjectId) {
+                this.error = 'Please select a PDF file and subject';
+                return;
+            }
+        } else {
+            if (!this.imageFiles.length || !this.subjectId) {
+                this.error = 'Please select at least one image and a subject';
+                return;
+            }
         }
         if (this.isPastPaper && !this.examBoard) {
             this.error = 'Please select an exam board for past paper uploads';
@@ -103,23 +141,38 @@
         this.loading = true;
 
         const formData = new FormData();
-        formData.append('file', this.file);
         formData.append('subject_id', this.subjectId);
         if (this.categoryId) formData.append('category_id', this.categoryId);
-        formData.append('page_start', this.pageStart);
-        formData.append('page_end', this.pageEnd);
         formData.append('is_shared', this.isShared ? 1 : 0);
         formData.append('batch_type', this.batchType);
-        if (!this.isPastPaper) {
-            formData.append('blend_past_papers', this.blendPastPapers ? '1' : '0');
-        }
 
-        if (this.isPastPaper) {
-            if (this.examBoard)   formData.append('exam_board', this.examBoard);
-            if (this.examYear)    formData.append('exam_year', this.examYear);
-            if (this.paperNumber) formData.append('paper_number', this.paperNumber);
-            if (this.tier)        formData.append('tier', this.tier);
-            if (this.msFile)      formData.append('mark_scheme_file', this.msFile);
+        if (this.uploadType === 'pdf') {
+            formData.append('file', this.file);
+            formData.append('page_start', this.pageStart);
+            formData.append('page_end', this.pageEnd);
+            if (!this.isPastPaper) {
+                formData.append('blend_past_papers', this.blendPastPapers ? '1' : '0');
+            }
+            if (this.isPastPaper) {
+                if (this.examBoard)   formData.append('exam_board', this.examBoard);
+                if (this.examYear)    formData.append('exam_year', this.examYear);
+                if (this.paperNumber) formData.append('paper_number', this.paperNumber);
+                if (this.tier)        formData.append('tier', this.tier);
+                if (this.msFile)      formData.append('mark_scheme_file', this.msFile);
+            }
+        } else {
+            for (const img of this.imageFiles) {
+                formData.append('images', img);
+            }
+            if (!this.isPastPaper) {
+                formData.append('blend_past_papers', this.blendPastPapers ? '1' : '0');
+            }
+            if (this.isPastPaper) {
+                if (this.examBoard)   formData.append('exam_board', this.examBoard);
+                if (this.examYear)    formData.append('exam_year', this.examYear);
+                if (this.paperNumber) formData.append('paper_number', this.paperNumber);
+                if (this.tier)        formData.append('tier', this.tier);
+            }
         }
 
         try {
@@ -189,8 +242,8 @@
     <div class="bg-white rounded-xl shadow-sm p-6 max-w-lg">
         <div x-show="error" class="bg-red-50 text-red-600 text-sm rounded-lg p-3 mb-4" x-text="error"></div>
 
-        <!-- Upload type toggle -->
-        <div class="flex rounded-lg border border-gray-200 p-1 mb-5 bg-gray-50">
+        <!-- Content type toggle -->
+        <div class="flex rounded-lg border border-gray-200 p-1 mb-3 bg-gray-50">
             <button type="button" @click="batchType = 'past_paper'"
                     :class="isPastPaper ? 'bg-white shadow-sm text-indigo-600 font-semibold' : 'text-gray-500 hover:text-gray-700'"
                     class="flex-1 py-2 px-3 rounded-md text-sm transition-all flex items-center justify-center gap-1.5">
@@ -203,34 +256,78 @@
             </button>
         </div>
 
+        <!-- File type toggle -->
+        <div class="flex rounded-lg border border-gray-200 p-1 mb-5 bg-gray-50">
+            <button type="button" @click="switchUploadType('pdf')"
+                    :class="uploadType === 'pdf' ? 'bg-white shadow-sm text-indigo-600 font-semibold' : 'text-gray-500 hover:text-gray-700'"
+                    class="flex-1 py-1.5 px-3 rounded-md text-sm transition-all flex items-center justify-center gap-1.5">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
+                PDF
+            </button>
+            <button type="button" @click="switchUploadType('images')"
+                    :class="uploadType === 'images' ? 'bg-white shadow-sm text-indigo-600 font-semibold' : 'text-gray-500 hover:text-gray-700'"
+                    class="flex-1 py-1.5 px-3 rounded-md text-sm transition-all flex items-center justify-center gap-1.5">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                Images
+            </button>
+        </div>
+
         <form @submit.prevent="upload()" class="space-y-5">
-            <!-- PDF File(s) -->
-            <div class="space-y-3">
+            <!-- PDF file input -->
+            <template x-if="uploadType === 'pdf'">
+                <div class="space-y-3">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            <span x-text="isPastPaper ? 'Question Paper PDF' : 'PDF File'"></span>
+                        </label>
+                        <input type="file" accept=".pdf" @change="onFileChange"
+                               class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
+                    </div>
+
+                    <!-- Optional mark scheme PDF (past paper mode only) -->
+                    <template x-if="isPastPaper">
+                        <div class="pl-4 border-l-2 border-blue-200">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">
+                                Mark Scheme PDF
+                                <span class="text-gray-400 font-normal">(optional)</span>
+                            </label>
+                            <input type="file" accept=".pdf" @change="onMsFileChange"
+                                   class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
+                            <p class="text-xs text-gray-400 mt-1">
+                                Upload the separate mark scheme PDF — answers will be automatically matched to questions.
+                                <span x-show="!msFile" class="text-gray-400">If omitted, AI-inferred answers are used.</span>
+                                <span x-show="msFile" class="text-blue-600 font-medium">✓ Mark scheme ready</span>
+                            </p>
+                        </div>
+                    </template>
+                </div>
+            </template>
+
+            <!-- Image file input -->
+            <template x-if="uploadType === 'images'">
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">
-                        <span x-text="isPastPaper ? 'Question Paper PDF' : 'PDF File'"></span>
+                        Images
+                        <span class="text-gray-400 font-normal">(JPG, PNG, WEBP, GIF — select multiple)</span>
                     </label>
-                    <input type="file" accept=".pdf" @change="onFileChange" required
-                           class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
-                </div>
-
-                <!-- Optional mark scheme PDF (past paper mode only) -->
-                <template x-if="isPastPaper">
-                    <div class="pl-4 border-l-2 border-blue-200">
-                        <label class="block text-sm font-medium text-gray-700 mb-1">
-                            Mark Scheme PDF
-                            <span class="text-gray-400 font-normal">(optional)</span>
-                        </label>
-                        <input type="file" accept=".pdf" @change="onMsFileChange"
-                               class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
-                        <p class="text-xs text-gray-400 mt-1">
-                            Upload the separate mark scheme PDF — answers will be automatically matched to questions.
-                            <span x-show="!msFile" class="text-gray-400">If omitted, AI-inferred answers are used.</span>
-                            <span x-show="msFile" class="text-blue-600 font-medium">✓ Mark scheme ready</span>
-                        </p>
+                    <input type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple
+                           @change="onImageFilesChange"
+                           class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-violet-50 file:text-violet-700 hover:file:bg-violet-100">
+                    <!-- Thumbnails -->
+                    <div x-show="imagePreviews.length > 0" class="mt-3 grid grid-cols-4 gap-2">
+                        <template x-for="(preview, i) in imagePreviews" :key="i">
+                            <div class="relative group">
+                                <img :src="preview" class="w-full h-16 object-cover rounded-lg border border-gray-200">
+                                <button type="button" @click="removeImage(i)"
+                                        class="absolute -top-1.5 -right-1.5 w-5 h-5 bg-red-500 text-white rounded-full text-xs leading-none flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow">✕</button>
+                                <p class="text-xs text-gray-400 mt-0.5 truncate" x-text="imageFiles[i] ? imageFiles[i].name : ''"></p>
+                            </div>
+                        </template>
                     </div>
-                </template>
-            </div>
+                    <p x-show="imagePreviews.length > 0" class="text-xs text-gray-500 mt-2"
+                       x-text="imagePreviews.length + ' image' + (imagePreviews.length === 1 ? '' : 's') + ' selected — each image is processed as one page'"></p>
+                </div>
+            </template>
 
             <!-- Subject -->
             <div>
@@ -366,19 +463,21 @@
                 </div>
             </template>
 
-            <!-- Page Range -->
-            <div class="grid grid-cols-2 gap-4">
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">Start Page</label>
-                    <input x-model.number="pageStart" type="number" min="1" required
-                           class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+            <!-- Page Range (PDF only) -->
+            <template x-if="uploadType === 'pdf'">
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Start Page</label>
+                        <input x-model.number="pageStart" type="number" min="1"
+                               class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">End Page</label>
+                        <input x-model.number="pageEnd" type="number" min="1"
+                               class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                    </div>
                 </div>
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">End Page</label>
-                    <input x-model.number="pageEnd" type="number" min="1" required
-                           class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
-                </div>
-            </div>
+            </template>
 
             <!-- Sharing toggle -->
             <div class="flex items-center gap-3">
@@ -390,9 +489,13 @@
             </div>
 
             <!-- Submit -->
-            <button type="submit" :disabled="loading || !file"
+            <button type="submit"
+                    :disabled="loading || (uploadType === 'pdf' ? !file : imageFiles.length === 0)"
                     class="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 transition">
-                <span x-show="!loading" x-text="isPastPaper ? '📄 Upload Past Paper' : '📚 Upload & Process'"></span>
+                <span x-show="!loading">
+                    <span x-show="uploadType === 'pdf'" x-text="isPastPaper ? '📄 Upload Past Paper' : '📚 Upload & Process'"></span>
+                    <span x-show="uploadType === 'images'" x-text="'🖼️ Upload ' + imageFiles.length + ' Image' + (imageFiles.length === 1 ? '' : 's')"></span>
+                </span>
                 <span x-show="loading">Uploading…</span>
             </button>
         </form>
