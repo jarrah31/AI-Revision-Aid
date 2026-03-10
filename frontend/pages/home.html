@@ -3,15 +3,18 @@ Alpine.data('homePage', () => ({
     subjects: [],
     pendingBatches: [],
     loading: true,
+    appVersion: '',
 
     async init() {
         try {
-            const [subjects, summary] = await Promise.all([
+            const [subjects, summary, ver] = await Promise.all([
                 API.get('/subjects'),
                 API.get('/dashboard/summary'),
+                API.get('/version'),
             ]);
             this.subjects = subjects;
             this.pendingBatches = summary.pending_review_batches || [];
+            this.appVersion = ver.version ? 'v' + ver.version : '';
         } catch (e) {
             $store.app.showToast('Failed to load home page', 'error');
         } finally {
@@ -96,13 +99,16 @@ Alpine.data('homePage', () => ({
     </div>
 
     <!-- Subject cards -->
-    <h2 class="text-lg font-semibold text-gray-700 mb-3">Your Subjects</h2>
-
     <div x-show="loading" class="text-center py-8 text-gray-400">Loading...</div>
 
     <div x-show="!loading && subjects.length === 0" class="text-center py-12 bg-white rounded-xl shadow-sm">
         <p class="text-gray-500 mb-3">No subjects yet. Create one to get started.</p>
         <a href="#subjects" class="text-indigo-600 font-medium hover:underline">Manage Subjects</a>
+    </div>
+
+    <div class="flex items-baseline justify-between mb-3">
+        <h2 class="text-lg font-semibold text-gray-700">Your Subjects</h2>
+        <span x-show="appVersion" x-text="appVersion" class="text-xs text-gray-300 font-mono"></span>
     </div>
 
     <div x-show="!loading && subjects.length > 0"

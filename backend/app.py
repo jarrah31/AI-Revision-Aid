@@ -19,7 +19,9 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="RevisionAid", lifespan=lifespan)
+APP_VERSION = "1.2.0"
+
+app = FastAPI(title="RevisionAid", version=APP_VERSION, lifespan=lifespan)
 
 # Routers
 from backend.routers.auth import router as auth_router
@@ -43,6 +45,11 @@ app.include_router(admin_router, prefix="/api/admin", tags=["admin"])
 app.include_router(dashboard_router, prefix="/api/dashboard", tags=["dashboard"])
 app.include_router(costs_router, prefix="/api/costs", tags=["costs"])
 app.include_router(categories_router, prefix="/api/categories", tags=["categories"])
+
+@app.get("/api/version")
+async def get_version():
+    return {"version": APP_VERSION}
+
 
 # Serve extracted images
 app.mount("/images", StaticFiles(directory=str(DATA_DIR / "images")), name="images")
