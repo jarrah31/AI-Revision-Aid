@@ -118,14 +118,15 @@
         const quizzes = this._getSavedQuizzes();
         const idx = quizzes.findIndex(q => q.id === this.quizId);
         const entry = {
-            id:           this.quizId,
-            sessionId:    this.sessionId,
-            questions:    this.questions,
-            currentIndex: this.currentIndex,
-            mode:         this.mode,
-            subjectName:  this.questions[0]?.subject_name || 'All Subjects',
-            categoryName: this.questions[0]?.category_name || '',
-            total:        this.questions.length,
+            id:              this.quizId,
+            sessionId:       this.sessionId,
+            questions:       this.questions,
+            currentIndex:    this.currentIndex,
+            mode:            this.mode,
+            questionSources: this.questionSources,
+            subjectName:     this.questions[0]?.subject_name || 'All Subjects',
+            categoryName:    this.questions[0]?.category_name || '',
+            total:           this.questions.length,
         };
         if (idx >= 0) quizzes[idx] = entry;
         else quizzes.unshift(entry);
@@ -139,12 +140,13 @@
     },
 
     resumeQuiz(saved) {
-        this.quizId       = saved.id;
-        this.sessionId    = saved.sessionId;
-        this.questions    = saved.questions;
-        this.currentIndex = saved.currentIndex ?? 0;
-        this.mode         = saved.mode || 'mixed';
-        this.phase        = 'quiz';
+        this.quizId          = saved.id;
+        this.sessionId       = saved.sessionId;
+        this.questions       = saved.questions;
+        this.currentIndex    = saved.currentIndex ?? 0;
+        this.mode            = saved.mode || 'mixed';
+        this.questionSources = saved.questionSources || [];
+        this.phase           = 'quiz';
         this.resetCard();
     },
 
@@ -450,6 +452,17 @@
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
                                 </svg>
                             </button>
+                        </div>
+                        <!-- Mode + Source badges -->
+                        <div class="flex flex-wrap gap-1.5 mb-3">
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-600"
+                                  x-text="{mixed:'Mixed',flashcard:'Flashcard',mcq:'Multiple Choice',typed:'Type Answer'}[sq.mode] || sq.mode">
+                            </span>
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500"
+                                  x-text="sq.questionSources?.length === 1
+                                      ? (sq.questionSources[0] === 'ai_generated' ? '📚 KO Only' : '📄 Past Paper Only')
+                                      : '📚📄 All Sources'">
+                            </span>
                         </div>
                         <!-- Progress -->
                         <div class="mb-3">
