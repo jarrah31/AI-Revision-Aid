@@ -414,7 +414,7 @@ def process_batch(
         db.close()
 
 
-_ALLOWED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+_ALLOWED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif"}
 
 
 @router.post("")

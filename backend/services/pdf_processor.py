@@ -3,6 +3,9 @@ from pathlib import Path
 import pymupdf
 from PIL import Image
 import io
+from pillow_heif import register_heif_opener
+
+register_heif_opener()  # Enable HEIC/HEIF support in Pillow
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
 
