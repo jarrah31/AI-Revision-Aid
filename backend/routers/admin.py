@@ -378,6 +378,10 @@ _AI_SETTING_METADATA: dict[str, dict] = {
     "ai_prompt_judging":               {"label": "Prompt", "type": "prompt", "group": "Answer Judging",                           "group_key": "judging"},
     "ai_prompt_fact_check":            {"label": "Prompt", "type": "prompt", "group": "Fact Check",                               "group_key": "fact_check"},
     "ai_prompt_matching":              {"label": "Prompt", "type": "prompt", "group": "Knowledge Organiser → Past Paper Matching", "group_key": "matching"},
+    "ai_model_handwritten_ocr":        {"label": "Model",  "type": "model",  "group": "Handwritten Notes OCR",                    "group_key": "handwritten_ocr"},
+    "ai_model_handwritten_qa":         {"label": "Model",  "type": "model",  "group": "Handwritten Notes Q&A",                    "group_key": "handwritten_qa"},
+    "ai_prompt_handwritten_ocr":       {"label": "Prompt", "type": "prompt", "group": "Handwritten Notes OCR",                    "group_key": "handwritten_ocr"},
+    "ai_prompt_handwritten_qa":        {"label": "Prompt", "type": "prompt", "group": "Handwritten Notes Q&A",                    "group_key": "handwritten_qa"},
 }
 
 AVAILABLE_MODELS: list[str] = [

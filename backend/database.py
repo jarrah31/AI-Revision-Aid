@@ -223,6 +223,19 @@ def init_db():
             value TEXT NOT NULL,
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
+
+        CREATE TABLE IF NOT EXISTS ocr_sections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            batch_id INTEGER NOT NULL,
+            image_num INTEGER NOT NULL,
+            section_order INTEGER NOT NULL,
+            title TEXT,
+            content TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (batch_id) REFERENCES upload_batches(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_ocr_sections_batch ON ocr_sections(batch_id);
     """)
 
     db.commit()
@@ -268,6 +281,8 @@ def init_db():
         "ALTER TABLE upload_batches ADD COLUMN category_id INTEGER DEFAULT NULL REFERENCES categories(id) ON DELETE SET NULL",
         # Image upload support
         "ALTER TABLE upload_batches ADD COLUMN source_type TEXT NOT NULL DEFAULT 'pdf'",
+        # Handwritten notes OCR review
+        "ALTER TABLE upload_batches ADD COLUMN is_handwritten INTEGER NOT NULL DEFAULT 0",
     ]:
         try:
             db.execute(migration)

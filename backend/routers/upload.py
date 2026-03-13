@@ -4,6 +4,7 @@ import json
 import traceback
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks
+from pydantic import BaseModel
 from typing import Optional, List
 
 from backend.auth import get_current_user
@@ -20,6 +21,8 @@ from backend.services.claude_service import (
     extract_qa_from_page_with_fallback,
     extract_qa_from_past_paper,
     match_ko_to_past_papers,
+    extract_sections_from_handwritten,
+    extract_qa_from_text,
 )
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
@@ -30,6 +33,13 @@ router = APIRouter()
 _QUESTION_PAGE_TYPES = {"questions", "both"}
 # Page types that contain mark scheme answers
 _MS_PAGE_TYPES = {"mark_scheme", "both"}
+
+
+class OcrSectionIn(BaseModel):
+    image_num: int
+    section_order: int
+    title: str | None = None
+    content: str = ""
 
 
 def _normalise_ref(ref: str) -> str:
@@ -414,7 +424,219 @@ def process_batch(
         db.close()
 
 
-_ALLOWED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif"}
+def process_batch_ocr(
+    batch_id: int,
+    subject_name: str,
+    subject_id: int,
+    user_id: int,
+    category_id: int | None = None,
+):
+    """Background task: OCR handwritten images, store sections, set status=awaiting_ocr_review."""
+    db = sqlite3.connect(str(DB_PATH))
+    db.row_factory = sqlite3.Row
+    db.execute("PRAGMA foreign_keys=ON")
+
+    try:
+        db.execute(
+            "UPDATE upload_batches SET status = 'ocr_processing' WHERE id = ?",
+            (batch_id,),
+        )
+        db.commit()
+
+        saved_images: list[Path] = sorted(
+            (DATA_DIR / "pdfs").glob(f"batch_{batch_id}_img_*"),
+            key=lambda p: int(re.search(r"_img_(\d+)", p.name).group(1)),
+        )
+        total = len(saved_images)
+        db.execute(
+            "UPDATE upload_batches SET total_pages = ? WHERE id = ?",
+            (total, batch_id),
+        )
+        db.commit()
+
+        for image_num, img_path in enumerate(saved_images, start=1):
+            try:
+                png_bytes = load_image_as_png_bytes(img_path)
+                save_full_page_image(batch_id, image_num, png_bytes)
+                image_b64 = png_to_base64(png_bytes)
+
+                sections, usage = extract_sections_from_handwritten(image_b64)
+
+                db.execute(
+                    """INSERT INTO api_usage
+                       (user_id, batch_id, call_type, input_tokens, output_tokens, cost_usd)
+                       VALUES (?, ?, 'handwritten_ocr', ?, ?, ?)""",
+                    (user_id, batch_id, usage["input_tokens"], usage["output_tokens"], usage["cost_usd"]),
+                )
+                db.execute(
+                    "UPDATE upload_batches SET cost_usd = cost_usd + ?, processed_pages = ? WHERE id = ?",
+                    (usage["cost_usd"], image_num, batch_id),
+                )
+
+                for sec in sections:
+                    db.execute(
+                        """INSERT INTO ocr_sections
+                           (batch_id, image_num, section_order, title, content)
+                           VALUES (?, ?, ?, ?, ?)""",
+                        (batch_id, image_num, sec["section_order"], sec.get("title"), sec.get("content", "")),
+                    )
+                db.commit()
+
+            except Exception as e:
+                print(f"[OCR] Error on image {image_num}: {e}")
+                traceback.print_exc()
+                db.execute(
+                    """UPDATE upload_batches
+                       SET error_message = COALESCE(error_message || '; ', '') || ?
+                       WHERE id = ?""",
+                    (f"Image {image_num}: {str(e)}", batch_id),
+                )
+                # Insert blank placeholder so student sees a textarea for this image
+                db.execute(
+                    """INSERT INTO ocr_sections (batch_id, image_num, section_order, title, content)
+                       VALUES (?, ?, 1, NULL, '')""",
+                    (batch_id, image_num),
+                )
+                db.commit()
+                continue
+
+        db.execute(
+            "UPDATE upload_batches SET status = 'awaiting_ocr_review' WHERE id = ?",
+            (batch_id,),
+        )
+        db.commit()
+
+    except Exception as e:
+        print(f"OCR batch processing failed: {e}")
+        traceback.print_exc()
+        db.execute(
+            "UPDATE upload_batches SET status = 'failed', error_message = ? WHERE id = ?",
+            (str(e), batch_id),
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+def process_batch_from_text(
+    batch_id: int,
+    subject_name: str,
+    subject_id: int,
+    user_id: int,
+    category_id: int | None = None,
+):
+    """Background task: generate Q&A from confirmed OCR text sections (no image re-processing)."""
+    db = sqlite3.connect(str(DB_PATH))
+    db.row_factory = sqlite3.Row
+    db.execute("PRAGMA foreign_keys=ON")
+
+    try:
+        db.execute(
+            "UPDATE upload_batches SET status = 'processing', processed_pages = 0 WHERE id = ?",
+            (batch_id,),
+        )
+        db.commit()
+
+        sections = db.execute(
+            """SELECT image_num, section_order, title, content
+               FROM ocr_sections
+               WHERE batch_id = ?
+               ORDER BY image_num, section_order""",
+            (batch_id,),
+        ).fetchall()
+
+        if not sections:
+            raise ValueError("No OCR sections found for this batch")
+
+        # Group sections by image_num
+        images: dict[int, list] = {}
+        for sec in sections:
+            images.setdefault(sec["image_num"], []).append(sec)
+
+        total_images = len(images)
+        db.execute(
+            "UPDATE upload_batches SET total_pages = ? WHERE id = ?",
+            (total_images, batch_id),
+        )
+        db.commit()
+
+        for image_num, img_sections in sorted(images.items()):
+            try:
+                text_parts = []
+                for sec in img_sections:
+                    heading = sec["title"] or f"Section {sec['section_order']}"
+                    text_parts.append(f"## {heading}\n\n{sec['content']}")
+                text_content = "\n\n".join(text_parts)
+
+                result, usage = extract_qa_from_text(text_content, subject_name)
+
+                db.execute(
+                    """INSERT INTO api_usage
+                       (user_id, batch_id, call_type, input_tokens, output_tokens, cost_usd)
+                       VALUES (?, ?, 'handwritten_qa', ?, ?, ?)""",
+                    (user_id, batch_id, usage["input_tokens"], usage["output_tokens"], usage["cost_usd"]),
+                )
+                db.execute(
+                    "UPDATE upload_batches SET cost_usd = cost_usd + ? WHERE id = ?",
+                    (usage["cost_usd"], batch_id),
+                )
+
+                for q in result.get("questions", []):
+                    db.execute(
+                        """INSERT INTO questions
+                           (batch_id, user_id, subject_id, category_id, page_number,
+                            question_text, answer_text, question_type, difficulty,
+                            source_context, question_source)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ai_generated')""",
+                        (
+                            batch_id, user_id, subject_id, category_id, image_num,
+                            q.get("question", ""),
+                            q.get("answer", ""),
+                            q.get("type", "factual"),
+                            q.get("difficulty", 1),
+                            q.get("source_quote") or None,
+                        ),
+                    )
+
+                db.execute(
+                    "UPDATE upload_batches SET processed_pages = ? WHERE id = ?",
+                    (image_num, batch_id),
+                )
+                db.commit()
+
+            except Exception as e:
+                print(f"[QA-from-text] Error on image {image_num}: {e}")
+                traceback.print_exc()
+                db.execute(
+                    """UPDATE upload_batches
+                       SET error_message = COALESCE(error_message || '; ', '') || ?
+                       WHERE id = ?""",
+                    (f"Image {image_num}: {str(e)}", batch_id),
+                )
+                db.commit()
+                continue
+
+        db.execute(
+            """UPDATE upload_batches
+               SET status = 'completed', completed_at = datetime('now')
+               WHERE id = ?""",
+            (batch_id,),
+        )
+        db.commit()
+
+    except Exception as e:
+        print(f"Text Q&A batch processing failed: {e}")
+        traceback.print_exc()
+        db.execute(
+            "UPDATE upload_batches SET status = 'failed', error_message = ? WHERE id = ?",
+            (str(e), batch_id),
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+_ALLOWED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 
 
 @router.post("")
@@ -426,6 +648,7 @@ async def upload_pdf(
     page_start: int = Form(1),
     page_end: int = Form(1),
     is_shared: int = Form(0),
+    is_handwritten: int = Form(0),
     batch_type: str = Form("knowledge_organiser"),
     blend_past_papers: int = Form(1),
     category_id: int | None = Form(None),
@@ -452,7 +675,7 @@ async def upload_pdf(
             if ext not in _ALLOWED_IMAGE_EXTS:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Unsupported image format: {img.filename}. Use JPG, PNG, GIF, or WEBP.",
+                    detail=f"Unsupported image format: {img.filename}. Accepted formats: JPG, PNG, GIF, WEBP.",
                 )
 
     # Validate batch_type
@@ -482,17 +705,21 @@ async def upload_pdf(
     else:
         filename = file.filename
 
+    # Only apply handwritten OCR mode for image uploads
+    if source_type != "images":
+        is_handwritten = 0
+
     # Create batch record first to get ID
     cursor = db.execute(
         """INSERT INTO upload_batches
            (user_id, subject_id, category_id, filename, pdf_path, page_start, page_end,
-            total_pages, is_shared, status, batch_type, source_type,
+            total_pages, is_shared, status, batch_type, source_type, is_handwritten,
             exam_board, exam_year, paper_number, tier)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)""",
         (
             user["id"], subject_id, category_id, filename, "", page_start, page_end,
             page_end - page_start + 1, is_shared,
-            batch_type, source_type,
+            batch_type, source_type, is_handwritten,
             exam_board if batch_type == "past_paper" else None,
             exam_year if batch_type == "past_paper" else None,
             paper_number if batch_type == "past_paper" else None,
@@ -556,27 +783,38 @@ async def upload_pdf(
         pdf_path_for_task = ""
 
     # Kick off background processing
-    background_tasks.add_task(
-        process_batch,
-        batch_id,
-        pdf_path_for_task,
-        subject["name"],
-        subject_id,
-        user["id"],
-        page_start,
-        page_end,
-        batch_type,
-        ms_pdf_path_str,
-        bool(blend_past_papers),
-        category_id,
-        source_type,
-    )
+    if is_handwritten and source_type == "images":
+        background_tasks.add_task(
+            process_batch_ocr,
+            batch_id,
+            subject["name"],
+            subject_id,
+            user["id"],
+            category_id,
+        )
+    else:
+        background_tasks.add_task(
+            process_batch,
+            batch_id,
+            pdf_path_for_task,
+            subject["name"],
+            subject_id,
+            user["id"],
+            page_start,
+            page_end,
+            batch_type,
+            ms_pdf_path_str,
+            bool(blend_past_papers),
+            category_id,
+            source_type,
+        )
 
     return {
         "batch_id": batch_id,
         "total_pages": page_end - page_start + 1,
         "has_mark_scheme": ms_pdf_path_str is not None,
         "source_type": source_type,
+        "is_handwritten": bool(is_handwritten),
     }
 
 
@@ -606,7 +844,150 @@ def get_batch_status(
         "error_message": batch["error_message"],
         "filename": batch["filename"],
         "batch_type": batch["batch_type"],
+        "is_handwritten": bool(batch["is_handwritten"]),
     }
+
+
+@router.get("/{batch_id}/ocr")
+def get_ocr_sections(
+    batch_id: int,
+    user: dict = Depends(get_current_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Return OCR sections for the handwritten review page."""
+    batch = db.execute(
+        "SELECT * FROM upload_batches WHERE id = ? AND user_id = ?",
+        (batch_id, user["id"]),
+    ).fetchone()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    sections = db.execute(
+        """SELECT id, image_num, section_order, title, content
+           FROM ocr_sections
+           WHERE batch_id = ?
+           ORDER BY image_num, section_order""",
+        (batch_id,),
+    ).fetchall()
+
+    # Group sections by image_num and build image_url
+    images: dict[int, dict] = {}
+    for sec in sections:
+        n = sec["image_num"]
+        if n not in images:
+            images[n] = {
+                "image_num": n,
+                "image_url": f"/images/batch_{batch_id}/page_{n}_full.png",
+                "sections": [],
+            }
+        images[n]["sections"].append({
+            "id": sec["id"],
+            "section_order": sec["section_order"],
+            "title": sec["title"],
+            "content": sec["content"],
+        })
+
+    return {
+        "batch_id": batch_id,
+        "filename": batch["filename"],
+        "images": list(images.values()),
+    }
+
+
+class OcrConfirmRequest(BaseModel):
+    sections: list[OcrSectionIn]
+
+
+@router.post("/{batch_id}/ocr/confirm")
+def confirm_ocr_sections(
+    batch_id: int,
+    req: OcrConfirmRequest,
+    background_tasks: BackgroundTasks,
+    user: dict = Depends(get_current_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Save confirmed/edited OCR sections and kick off Q&A generation."""
+    batch = db.execute(
+        "SELECT * FROM upload_batches WHERE id = ? AND user_id = ?",
+        (batch_id, user["id"]),
+    ).fetchone()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    if batch["status"] != "awaiting_ocr_review":
+        raise HTTPException(status_code=400, detail="Batch is not awaiting OCR review")
+
+    subject = db.execute(
+        "SELECT * FROM subjects WHERE id = ?", (batch["subject_id"],)
+    ).fetchone()
+
+    # Replace sections with confirmed edits
+    db.execute("DELETE FROM ocr_sections WHERE batch_id = ?", (batch_id,))
+    for sec in req.sections:
+        db.execute(
+            """INSERT INTO ocr_sections (batch_id, image_num, section_order, title, content)
+               VALUES (?, ?, ?, ?, ?)""",
+            (batch_id, sec.image_num, sec.section_order, sec.title, sec.content),
+        )
+    db.commit()
+
+    background_tasks.add_task(
+        process_batch_from_text,
+        batch_id,
+        subject["name"],
+        batch["subject_id"],
+        user["id"],
+        batch["category_id"],
+    )
+
+    return {"batch_id": batch_id}
+
+
+@router.get("/pending-ocr")
+def get_pending_ocr_reviews(
+    user: dict = Depends(get_current_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Return batches that are awaiting OCR review for the current user."""
+    batches = db.execute(
+        """SELECT b.id, b.filename, b.created_at, s.name as subject_name,
+                  COUNT(DISTINCT sec.image_num) as image_count
+           FROM upload_batches b
+           JOIN subjects s ON s.id = b.subject_id
+           LEFT JOIN ocr_sections sec ON sec.batch_id = b.id
+           WHERE b.user_id = ? AND b.status = 'awaiting_ocr_review'
+           GROUP BY b.id
+           ORDER BY b.created_at DESC""",
+        (user["id"],),
+    ).fetchall()
+    return [dict(b) for b in batches]
+
+
+@router.put("/{batch_id}/ocr")
+def save_ocr_draft(
+    batch_id: int,
+    req: OcrConfirmRequest,
+    user: dict = Depends(get_current_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Save edited OCR sections without triggering Q&A generation (draft save)."""
+    batch = db.execute(
+        "SELECT id, status FROM upload_batches WHERE id = ? AND user_id = ?",
+        (batch_id, user["id"]),
+    ).fetchone()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    if batch["status"] != "awaiting_ocr_review":
+        raise HTTPException(status_code=400, detail="Batch is not awaiting OCR review")
+
+    db.execute("DELETE FROM ocr_sections WHERE batch_id = ?", (batch_id,))
+    for sec in req.sections:
+        db.execute(
+            """INSERT INTO ocr_sections (batch_id, image_num, section_order, title, content)
+               VALUES (?, ?, ?, ?, ?)""",
+            (batch_id, sec.image_num, sec.section_order, sec.title, sec.content),
+        )
+    db.commit()
+    return {"batch_id": batch_id}
 
 
 @router.get("/history")

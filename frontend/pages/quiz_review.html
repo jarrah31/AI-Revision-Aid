@@ -1,0 +1,222 @@
+<div x-data="{
+    sessionId: null,
+    session: null,
+    answers: [],
+    loading: true,
+    filter: 'all',
+
+    async init() {
+        this.sessionId = window._routeParams?.[0];
+        if (!this.sessionId) {
+            window.location.hash = '#dashboard';
+            return;
+        }
+        try {
+            const data = await API.get('/quiz/' + this.sessionId);
+            this.session = data.session;
+            // Tag each answer with its original 1-based position
+            this.answers = data.answers.map((a, i) => ({ ...a, _num: i + 1 }));
+        } catch (e) {
+            Alpine.store('app').showToast('Failed to load quiz review', 'error');
+            window.location.hash = '#dashboard';
+        } finally {
+            this.loading = false;
+        }
+    },
+
+    get filteredAnswers() {
+        if (this.filter === 'correct')   return this.answers.filter(a => a.is_correct);
+        if (this.filter === 'incorrect') return this.answers.filter(a => !a.is_correct);
+        return this.answers;
+    },
+
+    get correctCount()   { return this.answers.filter(a =>  a.is_correct).length; },
+    get incorrectCount() { return this.answers.filter(a => !a.is_correct).length; },
+
+    get accuracy() {
+        return this.answers.length > 0
+            ? Math.round(this.correctCount / this.answers.length * 100)
+            : 0;
+    },
+
+    formatDate(d) {
+        return new Date(d).toLocaleDateString('en-GB', {
+            day: 'numeric', month: 'short', year: 'numeric',
+            hour: '2-digit', minute: '2-digit'
+        });
+    },
+
+    formatMode(m) {
+        return { mixed: 'Mixed', flashcard: 'Flashcard', mcq: 'Multiple Choice', typed: 'Typed Answer' }[m] || m;
+    },
+
+    formatFormat(f) {
+        return { flashcard: 'Flashcard', mcq: 'Multiple Choice', typed: 'Typed' }[f] || f;
+    }
+}">
+
+    <!-- Header -->
+    <div class="flex items-start justify-between mb-6">
+        <div>
+            <h1 class="text-2xl font-bold text-gray-800">Quiz Review</h1>
+            <p class="text-sm text-gray-500 mt-0.5" x-text="session?.subject_name || 'All Subjects'"></p>
+        </div>
+        <a href="#dashboard" class="text-sm text-indigo-600 hover:underline flex items-center gap-1 mt-1">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+            </svg>
+            Back to Dashboard
+        </a>
+    </div>
+
+    <!-- Loading -->
+    <div x-show="loading" class="flex items-center gap-3 text-gray-400 py-12 justify-center">
+        <svg class="animate-spin h-5 w-5" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+        </svg>
+        Loading quiz…
+    </div>
+
+    <template x-if="!loading && session">
+
+        <div>
+            <!-- Summary strip -->
+            <div class="bg-white rounded-xl shadow-sm p-4 mb-5 flex flex-wrap gap-x-8 gap-y-3 items-center">
+                <div>
+                    <p class="text-xs text-gray-400 mb-0.5">Date</p>
+                    <p class="text-sm font-medium text-gray-800" x-text="formatDate(session.started_at)"></p>
+                </div>
+                <div>
+                    <p class="text-xs text-gray-400 mb-0.5">Score</p>
+                    <p class="text-sm font-medium">
+                        <span class="text-green-600 font-bold" x-text="correctCount"></span>
+                        <span class="text-gray-400"> / </span>
+                        <span class="text-gray-600" x-text="answers.length"></span>
+                    </p>
+                </div>
+                <div>
+                    <p class="text-xs text-gray-400 mb-0.5">Accuracy</p>
+                    <p class="text-lg font-bold"
+                       :class="accuracy >= 70 ? 'text-green-600' : 'text-yellow-600'"
+                       x-text="accuracy + '%'"></p>
+                </div>
+                <div>
+                    <p class="text-xs text-gray-400 mb-0.5">Mode</p>
+                    <p class="text-sm font-medium text-gray-800" x-text="formatMode(session.quiz_mode)"></p>
+                </div>
+                <!-- Mini accuracy bar -->
+                <div class="ml-auto hidden sm:block">
+                    <div class="flex items-center gap-2">
+                        <div class="w-32 bg-gray-100 rounded-full h-2.5">
+                            <div class="h-2.5 rounded-full transition-all"
+                                 :class="accuracy >= 70 ? 'bg-green-500' : 'bg-yellow-500'"
+                                 :style="'width:' + accuracy + '%'"></div>
+                        </div>
+                        <div class="flex items-center gap-3 text-xs">
+                            <span class="text-green-600 font-medium" x-text="correctCount + ' correct'"></span>
+                            <span class="text-red-500 font-medium" x-text="incorrectCount + ' incorrect'"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Filter tabs -->
+            <div class="flex gap-1 bg-gray-100 rounded-lg p-1 w-fit mb-5">
+                <button @click="filter = 'all'"
+                        :class="filter === 'all'
+                            ? 'bg-white shadow-sm text-gray-800 font-semibold'
+                            : 'text-gray-500 hover:text-gray-700'"
+                        class="px-4 py-1.5 rounded-md text-sm transition-all"
+                        x-text="'All (' + answers.length + ')'">
+                </button>
+                <button @click="filter = 'correct'"
+                        :class="filter === 'correct'
+                            ? 'bg-white shadow-sm text-green-700 font-semibold'
+                            : 'text-gray-500 hover:text-gray-700'"
+                        class="px-4 py-1.5 rounded-md text-sm transition-all"
+                        x-text="'✓ Correct (' + correctCount + ')'">
+                </button>
+                <button @click="filter = 'incorrect'"
+                        :class="filter === 'incorrect'
+                            ? 'bg-white shadow-sm text-red-700 font-semibold'
+                            : 'text-gray-500 hover:text-gray-700'"
+                        class="px-4 py-1.5 rounded-md text-sm transition-all"
+                        x-text="'✗ Incorrect (' + incorrectCount + ')'">
+                </button>
+            </div>
+
+            <!-- Questions list -->
+            <div class="space-y-3">
+                <template x-for="a in filteredAnswers" :key="a.id">
+                    <div class="bg-white rounded-xl shadow-sm border-l-4 p-4"
+                         :class="a.is_correct ? 'border-green-400' : 'border-red-400'">
+
+                        <!-- Row header: question number + result badge + format -->
+                        <div class="flex items-center justify-between gap-2 mb-3">
+                            <div class="flex items-center gap-2">
+                                <span class="text-xs font-semibold text-gray-400 bg-gray-100 px-2 py-0.5 rounded"
+                                      x-text="'Q' + a._num"></span>
+                                <span class="text-xs px-2 py-0.5 rounded-full font-medium"
+                                      :class="a.is_correct ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'"
+                                      x-text="a.is_correct ? '✓ Correct' : '✗ Incorrect'">
+                                </span>
+                            </div>
+                            <span class="text-xs text-gray-400 bg-gray-50 px-2 py-0.5 rounded"
+                                  x-text="formatFormat(a.quiz_format)"></span>
+                        </div>
+
+                        <!-- Question text -->
+                        <p class="text-sm font-medium text-gray-800 mb-3" x-text="a.question_text"></p>
+
+                        <!-- Student's answer (MCQ / Typed only) -->
+                        <template x-if="a.quiz_format !== 'flashcard' && a.student_answer">
+                            <div class="mb-2">
+                                <p class="text-xs text-gray-400 mb-0.5">Your answer</p>
+                                <p class="text-sm px-3 py-1.5 rounded-lg"
+                                   :class="a.is_correct
+                                       ? 'bg-green-50 text-green-700'
+                                       : 'bg-red-50 text-red-600'"
+                                   x-text="a.student_answer">
+                                </p>
+                            </div>
+                        </template>
+
+                        <!-- Correct answer (shown when wrong, or always for flashcard) -->
+                        <template x-if="!a.is_correct || a.quiz_format === 'flashcard'">
+                            <div class="mb-2">
+                                <p class="text-xs text-gray-400 mb-0.5">Correct answer</p>
+                                <p class="text-sm bg-gray-50 text-gray-700 px-3 py-1.5 rounded-lg"
+                                   x-text="a.answer_text">
+                                </p>
+                            </div>
+                        </template>
+
+                        <!-- AI feedback (typed format) -->
+                        <template x-if="a.ai_feedback">
+                            <p class="text-xs text-gray-500 italic mt-1 pt-2 border-t border-gray-100"
+                               x-text="a.ai_feedback"></p>
+                        </template>
+
+                        <!-- Footer: time taken -->
+                        <template x-if="a.time_taken_ms">
+                            <div class="mt-2 pt-2 border-t border-gray-100">
+                                <span class="text-xs text-gray-300"
+                                      x-text="Math.round(a.time_taken_ms / 1000) + 's to answer'"></span>
+                            </div>
+                        </template>
+                    </div>
+                </template>
+
+                <!-- Empty state (filtered) -->
+                <div x-show="filteredAnswers.length === 0"
+                     class="text-center py-10 bg-white rounded-xl shadow-sm text-gray-400">
+                    <p x-text="filter === 'correct'
+                        ? 'No correct answers in this session.'
+                        : 'No incorrect answers — perfect score! 🎉'"></p>
+                </div>
+            </div>
+        </div>
+
+    </template>
+</div>

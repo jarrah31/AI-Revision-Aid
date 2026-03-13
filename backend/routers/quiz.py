@@ -322,7 +322,10 @@ def get_session(
     db: sqlite3.Connection = Depends(get_db),
 ):
     session = db.execute(
-        "SELECT * FROM quiz_sessions WHERE id = ? AND user_id = ?",
+        """SELECT qs.*, s.name as subject_name
+           FROM quiz_sessions qs
+           LEFT JOIN subjects s ON s.id = qs.subject_id
+           WHERE qs.id = ? AND qs.user_id = ?""",
         (session_id, user["id"]),
     ).fetchone()
     if not session:

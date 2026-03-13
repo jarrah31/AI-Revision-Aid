@@ -1,0 +1,213 @@
+<div x-data="{
+    batchId: null,
+    filename: '',
+    images: [],
+    loading: true,
+    saving: false,
+    savingDraft: false,
+    draftSaved: false,
+    error: '',
+    fullscreenUrl: null,
+
+    async init() {
+        this.batchId = window._routeParams?.[0];
+        if (!this.batchId) {
+            window.location.hash = '#upload';
+            return;
+        }
+        try {
+            const data = await API.get('/upload/' + this.batchId + '/ocr');
+            this.filename = data.filename;
+            this.images = data.images.map(img => ({
+                ...img,
+                editedText: this._sectionsToText(img.sections)
+            }));
+        } catch (e) {
+            this.error = e.message || 'Failed to load OCR data';
+        } finally {
+            this.loading = false;
+        }
+    },
+
+    _sectionsToText(sections) {
+        if (!sections || sections.length === 0) return '';
+        return sections.map(sec => {
+            const content = (sec.content || '').trim();
+            if (sec.title && sec.title.trim()) {
+                return '## ' + sec.title.trim() + '\n' + content;
+            }
+            return content;
+        }).filter(t => t).join('\n\n').trim();
+    },
+
+    async saveDraft() {
+        this.savingDraft = true;
+        this.draftSaved = false;
+        this.error = '';
+        try {
+            const sections = this.images.map(img => ({
+                image_num: img.image_num,
+                section_order: 1,
+                title: null,
+                content: img.editedText || ''
+            }));
+            await API.put('/upload/' + this.batchId + '/ocr', { sections });
+            this.draftSaved = true;
+            setTimeout(() => { this.draftSaved = false; }, 3000);
+        } catch (e) {
+            this.error = e.message || 'Failed to save edits. Please try again.';
+        } finally {
+            this.savingDraft = false;
+        }
+    },
+
+    async confirm() {
+        this.saving = true;
+        this.error = '';
+        try {
+            const sections = this.images.map(img => ({
+                image_num: img.image_num,
+                section_order: 1,
+                title: null,
+                content: img.editedText || ''
+            }));
+            await API.post('/upload/' + this.batchId + '/ocr/confirm', { sections });
+            window.location.hash = '#processing/' + this.batchId;
+        } catch (e) {
+            this.error = e.message || 'Failed to confirm OCR. Please try again.';
+            this.saving = false;
+        }
+    }
+}">
+    <!-- Header -->
+    <div class="flex items-center justify-between mb-6">
+        <div>
+            <h1 class="text-2xl font-bold text-gray-800">Review Handwritten Text</h1>
+            <p class="text-sm text-gray-500 mt-0.5" x-text="filename"></p>
+        </div>
+        <a href="#upload" class="text-sm text-indigo-600 hover:underline">← Back to upload</a>
+    </div>
+
+    <!-- Info banner -->
+    <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6 flex gap-3">
+        <span class="text-xl shrink-0 mt-0.5">✏️</span>
+        <div class="text-sm text-amber-800">
+            <p class="font-semibold mb-0.5">Check the extracted text before generating questions</p>
+            <p>The AI has transcribed your handwritten notes. Section headings are marked with <code class="bg-amber-100 px-1 rounded font-mono">##</code>. Edit any mistakes, then click <strong>Confirm &amp; Generate Questions</strong>.</p>
+        </div>
+    </div>
+
+    <!-- Loading state -->
+    <div x-show="loading" class="flex items-center gap-3 text-gray-400 py-12 justify-center">
+        <svg class="animate-spin h-6 w-6" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+        </svg>
+        <span>Loading extracted text…</span>
+    </div>
+
+    <!-- Error state -->
+    <div x-show="error && !loading" class="bg-red-50 border border-red-200 rounded-xl p-4 mb-6 text-red-700 text-sm" x-text="error"></div>
+
+    <!-- Per-image review panels -->
+    <template x-if="!loading && images.length > 0">
+        <div class="space-y-8">
+            <template x-for="(img, imgIdx) in images" :key="img.image_num">
+                <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+
+                    <!-- Image header -->
+                    <div class="bg-gray-50 border-b border-gray-200 px-4 py-2 flex items-center gap-2">
+                        <span class="text-xs font-semibold text-gray-500 uppercase tracking-wide"
+                              x-text="'Image ' + img.image_num + ' of ' + images.length"></span>
+                    </div>
+
+                    <!-- Extracted text editor (top) -->
+                    <div class="p-4">
+                        <label class="block text-xs font-medium text-gray-500 mb-2">Extracted text — edit any mistakes</label>
+                        <textarea x-model="img.editedText"
+                                  placeholder="No text was extracted from this image. You can type the content here…"
+                                  rows="10"
+                                  class="w-full text-sm px-3 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white resize-y font-mono leading-relaxed"></textarea>
+                    </div>
+
+                    <!-- Original image (bottom) -->
+                    <div class="border-t border-gray-100 bg-gray-50 p-4">
+                        <p class="text-xs text-gray-400 mb-2 flex items-center gap-1">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7"/>
+                            </svg>
+                            Original image — click to enlarge
+                        </p>
+                        <img :src="img.image_url"
+                             alt="Original handwritten image"
+                             class="w-full rounded-lg shadow-sm object-contain cursor-zoom-in max-h-[480px] hover:opacity-90 transition-opacity"
+                             @click="fullscreenUrl = img.image_url"
+                             @error="$el.parentElement.innerHTML = '<p class=\'text-xs text-gray-400 italic\'>Image preview unavailable</p>'">
+                    </div>
+                </div>
+            </template>
+
+            <!-- Footer actions -->
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div class="text-sm text-gray-500">
+                    <span x-text="images.length + ' image' + (images.length === 1 ? '' : 's') + ' to confirm'"></span>
+                </div>
+                <div class="flex flex-wrap items-center gap-3">
+                    <div x-show="error" class="text-sm text-red-600 w-full sm:w-auto" x-text="error"></div>
+                    <!-- Save draft button -->
+                    <button type="button"
+                            @click="saveDraft()"
+                            :disabled="savingDraft || saving"
+                            class="flex items-center gap-2 bg-white border border-gray-300 text-gray-700 px-4 py-2.5 rounded-lg font-medium text-sm hover:bg-gray-50 disabled:opacity-50 transition">
+                        <svg x-show="savingDraft" class="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <svg x-show="draftSaved && !savingDraft" class="h-4 w-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                        </svg>
+                        <span x-text="savingDraft ? 'Saving…' : draftSaved ? 'Saved!' : 'Save Current Edits'"></span>
+                    </button>
+                    <!-- Confirm + generate button -->
+                    <button type="button"
+                            @click="confirm()"
+                            :disabled="saving || savingDraft"
+                            class="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-lg font-medium text-sm hover:bg-indigo-700 disabled:opacity-50 transition">
+                        <svg x-show="saving" class="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <span x-text="saving ? 'Saving…' : '✓ Confirm &amp; Generate Questions'"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <!-- Fullscreen image modal -->
+    <div x-show="fullscreenUrl"
+         x-transition:enter="transition ease-out duration-200"
+         x-transition:enter-start="opacity-0"
+         x-transition:enter-end="opacity-100"
+         x-transition:leave="transition ease-in duration-150"
+         x-transition:leave-start="opacity-100"
+         x-transition:leave-end="opacity-0"
+         class="fixed inset-0 bg-black/85 z-50 flex items-center justify-center p-4"
+         @click="fullscreenUrl = null"
+         @keydown.escape.window="fullscreenUrl = null"
+         style="display:none">
+        <div class="relative max-w-full max-h-full" @click.stop>
+            <img :src="fullscreenUrl"
+                 alt="Full size handwritten image"
+                 class="max-w-[90vw] max-h-[90vh] rounded-lg shadow-2xl object-contain">
+            <button @click="fullscreenUrl = null"
+                    class="absolute -top-3 -right-3 bg-white/10 hover:bg-white/20 text-white rounded-full p-1.5 transition"
+                    title="Close">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+            </button>
+        </div>
+        <p class="absolute bottom-4 text-white/50 text-xs">Click anywhere or press Esc to close</p>
+    </div>
+</div>

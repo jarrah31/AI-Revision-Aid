@@ -10,14 +10,18 @@ from backend.prompts.answer_judging import ANSWER_JUDGING_PROMPT
 from backend.prompts.past_paper_extraction import PAST_PAPER_EXTRACTION_PROMPT
 from backend.prompts.fact_check import FACT_CHECK_PROMPT
 from backend.prompts.matching import MATCHING_PROMPT
+from backend.prompts.handwritten_ocr import HANDWRITTEN_OCR_PROMPT
+from backend.prompts.handwritten_qa import HANDWRITTEN_QA_PROMPT
 
 # ── Default models ─────────────────────────────────────────────────────────────
 # These are the hardcoded defaults; admins can override any of them via the
 # AI Settings panel (stored in the `settings` DB table).
 
-EXTRACTION_MODEL  = "claude-sonnet-4-6"   # Vision — PDF page images
-QUIZ_MODEL        = "claude-haiku-4-5"    # Text-only — MCQ, judging, matching
-FACT_CHECK_MODEL  = "claude-sonnet-4-6"   # Needs web-search tool
+EXTRACTION_MODEL       = "claude-sonnet-4-6"   # Vision — PDF page images
+QUIZ_MODEL             = "claude-haiku-4-5"    # Text-only — MCQ, judging, matching
+FACT_CHECK_MODEL       = "claude-sonnet-4-6"   # Needs web-search tool
+HANDWRITTEN_OCR_MODEL  = "claude-sonnet-4-6"   # Vision — handwritten image OCR
+HANDWRITTEN_QA_MODEL   = "claude-haiku-4-5"    # Text-only — Q&A from confirmed text
 
 # Per-model pricing (cost per million tokens) — source: platform.claude.com/docs/en/about-claude/pricing
 MODEL_PRICING: dict[str, dict[str, float]] = {
@@ -61,6 +65,11 @@ AI_SETTING_DEFAULTS: dict[str, str] = {
     "ai_prompt_judging":            ANSWER_JUDGING_PROMPT,
     "ai_prompt_fact_check":         FACT_CHECK_PROMPT,
     "ai_prompt_matching":           MATCHING_PROMPT,
+    # Handwritten notes
+    "ai_model_handwritten_ocr":     HANDWRITTEN_OCR_MODEL,
+    "ai_model_handwritten_qa":      HANDWRITTEN_QA_MODEL,
+    "ai_prompt_handwritten_ocr":    HANDWRITTEN_OCR_PROMPT,
+    "ai_prompt_handwritten_qa":     HANDWRITTEN_QA_PROMPT,
 }
 
 
@@ -310,6 +319,57 @@ def match_ko_to_past_papers(
     )
     result = json.loads(_strip_fences(message.content[0].text))
     return result.get("matches", [])
+
+
+def extract_sections_from_handwritten(image_b64: str) -> tuple[list, dict]:
+    """Send a handwritten notes image to Claude for OCR and section detection.
+    Returns (sections_list, usage_dict).
+    Each section dict has keys: section_order, title, content.
+    """
+    client = get_client()
+    model  = _get_ai_setting("ai_model_handwritten_ocr")
+    prompt = _get_ai_setting("ai_prompt_handwritten_ocr")
+
+    message = client.messages.create(
+        model=model,
+        max_tokens=4096,
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": image_b64}},
+                {"type": "text",  "text": prompt},
+            ],
+        }],
+    )
+    if message.stop_reason == "max_tokens":
+        raise ValueError("OCR response truncated — image may contain too much text")
+    result = json.loads(_strip_fences(message.content[0].text))
+    sections = result.get("sections", [])
+    if not sections:
+        sections = [{"section_order": 1, "title": None, "content": ""}]
+    return sections, _calc_usage(message, model)
+
+
+def extract_qa_from_text(text_content: str, subject: str) -> tuple[dict, dict]:
+    """Generate Q&A pairs from confirmed OCR text (no image re-processing).
+    Model and prompt are read from DB settings (admin-configurable).
+    Returns (result_dict, usage_dict).
+    """
+    client = get_client()
+    model  = _get_ai_setting("ai_model_handwritten_qa")
+    prompt = _get_ai_setting("ai_prompt_handwritten_qa").format(
+        subject=subject,
+        text_content=text_content,
+    )
+
+    message = client.messages.create(
+        model=model,
+        max_tokens=8192,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    if message.stop_reason == "max_tokens":
+        raise ValueError("Q&A response truncated — notes may be too long")
+    return json.loads(_strip_fences(message.content[0].text)), _calc_usage(message, model)
 
 
 def fact_check_question(question: str, answer: str, subject: str) -> tuple[dict, dict]:

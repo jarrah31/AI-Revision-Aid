@@ -3,9 +3,6 @@ from pathlib import Path
 import pymupdf
 from PIL import Image
 import io
-from pillow_heif import register_heif_opener
-
-register_heif_opener()  # Enable HEIC/HEIF support in Pillow
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
 
@@ -98,16 +95,42 @@ def get_pdf_page_count(pdf_path: str) -> int:
     return count
 
 
+_MAX_CLAUDE_DIMENSION = 1568   # Anthropic's recommended max side length for vision
+_MAX_CLAUDE_IMAGE_BYTES = 4 * 1024 * 1024  # 4 MB — safely under the 5 MB API limit
+
+
 def load_image_as_png_bytes(image_path: Path) -> bytes:
-    """Load any supported image file (JPG, PNG, WEBP, GIF) and return as PNG bytes."""
+    """Load any supported image file (JPG, PNG, WEBP, GIF) and return PNG bytes
+    sized to fit within the Claude API 5 MB image limit.
+    """
     img = Image.open(image_path)
+
+    # Flatten transparency onto white background
     if img.mode == "RGBA":
-        # Flatten alpha onto white background
         background = Image.new("RGB", img.size, (255, 255, 255))
         background.paste(img, mask=img.split()[3])
         img = background
     elif img.mode not in ("RGB", "L"):
         img = img.convert("RGB")
+
+    # Scale down if wider/taller than Claude's recommended max dimension
+    w, h = img.size
+    if max(w, h) > _MAX_CLAUDE_DIMENSION:
+        scale = _MAX_CLAUDE_DIMENSION / max(w, h)
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+
     buf = io.BytesIO()
     img.save(buf, "PNG", optimize=True)
-    return buf.getvalue()
+    png_bytes = buf.getvalue()
+
+    # Secondary shrink: if a very detailed image is still over the safe limit,
+    # reduce to 1024px on the longest side and retry
+    if len(png_bytes) > _MAX_CLAUDE_IMAGE_BYTES:
+        w, h = img.size
+        scale = 1024 / max(w, h)
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, "PNG", optimize=True)
+        png_bytes = buf.getvalue()
+
+    return png_bytes
