@@ -20,7 +20,9 @@ Alpine.data('subjectsPage', () => ({
     // Convert category → sub-category state
     showConvertForm: false,
     convertingCat: null,           // { id, name, subject_id }
+    convertParentMode: 'existing', // 'existing' | 'new'
     convertParentCatId: null,
+    convertNewParentName: '',
     convertMode: 'new',            // 'new' | 'existing'
     convertSubcatName: '',
     convertExistingSubcatId: null,
@@ -243,15 +245,37 @@ Alpine.data('subjectsPage', () => ({
     },
 
     // ── Convert category → sub-category ────────────────────────────────────
+    canConvert(subjectId, catId) {
+        const cats = this.categories[subjectId];
+        if (!Array.isArray(cats)) return false;
+        return cats.filter(c => c.id !== catId).length > 0;
+    },
+
     openConvertCat(cat, subjectId) {
         this.convertingCat = { id: cat.id, name: cat.name, subject_id: subjectId };
+        // Default to 'existing' if there are other categories, otherwise 'new'
+        const cats = this.categories[subjectId];
+        const hasOtherCats = Array.isArray(cats) && cats.filter(c => c.id !== cat.id).length > 0;
+        this.convertParentMode = hasOtherCats ? 'existing' : 'new';
         this.convertParentCatId = null;
+        this.convertNewParentName = '';
         this.convertMode = 'new';
         this.convertSubcatName = cat.name;
         this.convertExistingSubcatId = null;
         this.convertParentSubcats = [];
         this.convertError = '';
         this.showConvertForm = true;
+    },
+
+    onConvertParentModeChange() {
+        this.convertParentCatId = null;
+        this.convertNewParentName = '';
+        this.convertExistingSubcatId = null;
+        this.convertParentSubcats = [];
+        // New parent can't have existing subcategories
+        if (this.convertParentMode === 'new') {
+            this.convertMode = 'new';
+        }
     },
 
     async onConvertParentChange() {
@@ -284,11 +308,20 @@ Alpine.data('subjectsPage', () => ({
 
     async saveConvert() {
         this.convertError = '';
-        if (!this.convertParentCatId) {
-            this.convertError = 'Please select a parent category';
-            return;
+        const body = {};
+        if (this.convertParentMode === 'new') {
+            if (!this.convertNewParentName.trim()) {
+                this.convertError = 'Please enter a name for the new category';
+                return;
+            }
+            body.new_parent_category_name = this.convertNewParentName.trim();
+        } else {
+            if (!this.convertParentCatId) {
+                this.convertError = 'Please select a parent category';
+                return;
+            }
+            body.parent_category_id = parseInt(this.convertParentCatId);
         }
-        const body = { parent_category_id: parseInt(this.convertParentCatId) };
         if (this.convertMode === 'existing') {
             if (!this.convertExistingSubcatId) {
                 this.convertError = 'Please select an existing sub-category';
@@ -461,19 +494,45 @@ Alpine.data('subjectsPage', () => ({
             <div x-show="convertError" class="bg-red-50 text-red-600 text-sm rounded-lg p-3 mb-4" x-text="convertError"></div>
             <form @submit.prevent="saveConvert()" class="space-y-4">
 
-                <!-- Parent category select -->
+                <!-- Parent category: existing or new toggle -->
                 <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">Parent Category <span class="text-red-500">*</span></label>
-                    <select x-model.number="convertParentCatId" @change="onConvertParentChange()" required
-                            class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
-                        <option :value="null">— Select a category —</option>
-                        <template x-for="c in (categories[convertingCat?.subject_id] || []).filter(c => c.id !== convertingCat?.id)" :key="c.id">
-                            <option :value="c.id" x-text="c.name" :selected="c.id === convertParentCatId"></option>
-                        </template>
-                    </select>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Parent Category <span class="text-red-500">*</span></label>
+                    <div class="flex rounded-lg border border-gray-200 p-1 bg-gray-50 mb-3">
+                        <button type="button" @click="convertParentMode = 'existing'; onConvertParentModeChange()"
+                                :class="convertParentMode === 'existing' ? 'bg-white shadow-sm text-indigo-600 font-semibold' : 'text-gray-500 hover:text-gray-700'"
+                                class="flex-1 py-1.5 px-3 rounded-md text-sm transition-all">
+                            Existing
+                        </button>
+                        <button type="button" @click="convertParentMode = 'new'; onConvertParentModeChange()"
+                                :class="convertParentMode === 'new' ? 'bg-white shadow-sm text-indigo-600 font-semibold' : 'text-gray-500 hover:text-gray-700'"
+                                class="flex-1 py-1.5 px-3 rounded-md text-sm transition-all">
+                            Create New
+                        </button>
+                    </div>
+
+                    <!-- Existing: dropdown -->
+                    <div x-show="convertParentMode === 'existing'">
+                        <select x-model.number="convertParentCatId" @change="onConvertParentChange()"
+                                class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                            <option :value="null">— Select a category —</option>
+                            <template x-for="c in (categories[convertingCat?.subject_id] || []).filter(c => c.id !== convertingCat?.id)" :key="c.id">
+                                <option :value="c.id" x-text="c.name" :selected="c.id === convertParentCatId"></option>
+                            </template>
+                        </select>
+                        <p x-show="!(categories[convertingCat?.subject_id] || []).filter(c => c.id !== convertingCat?.id).length"
+                           class="text-xs text-amber-600 mt-1">
+                            No other categories exist yet — switch to "Create New" to add one.
+                        </p>
+                    </div>
+
+                    <!-- New: name input -->
+                    <div x-show="convertParentMode === 'new'">
+                        <input x-model="convertNewParentName" type="text" placeholder="New category name"
+                               class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                    </div>
                 </div>
 
-                <!-- New vs existing toggle -->
+                <!-- Sub-category: new vs existing toggle -->
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-2">Sub-Category</label>
                     <div class="flex rounded-lg border border-gray-200 p-1 bg-gray-50 mb-3">
@@ -483,7 +542,8 @@ Alpine.data('subjectsPage', () => ({
                             Create New
                         </button>
                         <button type="button" @click="convertMode = 'existing'; onConvertModeChange()"
-                                :class="convertMode === 'existing' ? 'bg-white shadow-sm text-indigo-600 font-semibold' : 'text-gray-500 hover:text-gray-700'"
+                                :disabled="convertParentMode === 'new'"
+                                :class="convertMode === 'existing' ? 'bg-white shadow-sm text-indigo-600 font-semibold' : convertParentMode === 'new' ? 'text-gray-300 cursor-not-allowed' : 'text-gray-500 hover:text-gray-700'"
                                 class="flex-1 py-1.5 px-3 rounded-md text-sm transition-all">
                             Use Existing
                         </button>
@@ -491,7 +551,7 @@ Alpine.data('subjectsPage', () => ({
 
                     <!-- New: name input -->
                     <div x-show="convertMode === 'new'">
-                        <input x-model="convertSubcatName" type="text" required placeholder="Sub-category name"
+                        <input x-model="convertSubcatName" type="text" placeholder="Sub-category name"
                                class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
                         <p class="text-xs text-gray-400 mt-1">Pre-filled with the current category name — edit if needed.</p>
                     </div>
@@ -646,7 +706,6 @@ Alpine.data('subjectsPage', () => ({
                                             </svg>
                                         </button>
                                         <button @click.stop="openConvertCat(cat, subject.id)"
-                                                x-show="(categories[subject.id] || []).length > 1"
                                                 class="p-1 text-gray-400 hover:text-violet-600 hover:bg-violet-50 rounded transition"
                                                 title="Convert to sub-category">
                                             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -680,9 +739,11 @@ Alpine.data('subjectsPage', () => ({
                                         <div class="flex items-center justify-between py-1.5 group/sc">
                                             <div class="flex items-center gap-1.5 min-w-0 flex-1">
                                                 <span class="w-1 h-1 rounded-full bg-gray-300 shrink-0"></span>
-                                                <span class="text-xs text-gray-600 truncate" x-text="sc.name"></span>
+                                                <a :href="'#review-subcategory/' + sc.id"
+                                                   class="text-xs text-gray-600 hover:text-indigo-700 truncate transition-colors"
+                                                   x-text="sc.name"></a>
                                                 <span class="text-xs text-gray-400 shrink-0"
-                                                      x-text="'(' + (sc.question_count || 0) + ')'"></span>
+                                                      x-text="'(' + (sc.approved_count || 0) + '/' + (sc.question_count || 0) + ' approved)'"></span>
                                             </div>
                                             <div class="flex items-center gap-0.5 shrink-0 ml-2 opacity-0 group-hover/sc:opacity-100 transition-opacity">
                                                 <button @click="openEditSubcat(sc, cat.id)"

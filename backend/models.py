@@ -67,6 +67,7 @@ class PageCategoryAssign(BaseModel):
 
 
 class ConvertToSubcategoryRequest(BaseModel):
-    parent_category_id: int
+    parent_category_id: int | None = None
+    new_parent_category_name: str | None = Field(default=None, min_length=1, max_length=100)
     subcategory_name: str | None = Field(default=None, min_length=1, max_length=100)
     existing_subcategory_id: int | None = None

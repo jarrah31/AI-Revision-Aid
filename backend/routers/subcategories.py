@@ -38,6 +38,27 @@ def list_subcategories(
     return [dict(r) for r in rows]
 
 
+@router.get("/{subcategory_id}")
+def get_subcategory(
+    subcategory_id: int,
+    user: dict = Depends(get_current_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Get a single subcategory with its category and subject names."""
+    row = db.execute(
+        """SELECT sc.*, c.name as category_name, c.subject_id,
+                  s.name as subject_name
+           FROM subcategories sc
+           JOIN categories c ON c.id = sc.category_id
+           JOIN subjects s ON s.id = c.subject_id
+           WHERE sc.id = ?""",
+        (subcategory_id,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Subcategory not found")
+    return dict(row)
+
+
 @router.post("", status_code=201)
 def create_subcategory(
     req: SubcategoryCreate,

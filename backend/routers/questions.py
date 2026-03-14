@@ -16,6 +16,7 @@ def list_questions(
     subject_id: int | None = None,
     batch_id: int | None = None,
     category_id: int | None = None,
+    subcategory_id: int | None = None,
     approved: int | None = None,
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=200),
@@ -34,6 +35,9 @@ def list_questions(
     if category_id is not None:
         conditions.append("q.category_id = ?")
         params.append(category_id)
+    if subcategory_id is not None:
+        conditions.append("q.subcategory_id = ?")
+        params.append(subcategory_id)
     if approved is not None:
         conditions.append("q.approved = ?")
         params.append(approved)
@@ -44,11 +48,13 @@ def list_questions(
 
     rows = db.execute(
         f"""SELECT q.*, i.filename as image_filename, i.description as image_description,
-                   s.name as subject_name, c.name as category_name
+                   s.name as subject_name, c.name as category_name,
+                   sc.name as subcategory_name
             FROM questions q
             LEFT JOIN images i ON i.id = q.image_id
             LEFT JOIN subjects s ON s.id = q.subject_id
             LEFT JOIN categories c ON c.id = q.category_id
+            LEFT JOIN subcategories sc ON sc.id = q.subcategory_id
             WHERE {where}
             ORDER BY q.page_number, q.id
             LIMIT ? OFFSET ?""",
