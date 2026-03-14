@@ -31,9 +31,12 @@
     summary: null,
 
     async init() {
-        // Check if subject passed in URL
-        const subjectParam = window._routeParams?.[0];
-        if (subjectParam) this.subjectId = parseInt(subjectParam);
+        // Check route params — 'srs' triggers auto-start for due-card review
+        const routeParam = window._routeParams?.[0];
+        const isSrsAutoStart = routeParam === 'srs';
+
+        // Check if subject passed in URL (non-SRS mode)
+        if (!isSrsAutoStart && routeParam) this.subjectId = parseInt(routeParam);
 
         try {
             this.subjects = await API.get('/subjects');
@@ -52,6 +55,13 @@
         sessionStorage.removeItem('ra_quiz'); // clean up old single-quiz key
         localStorage.removeItem('ra_quizzes'); // clean up old localStorage key
         await this._loadSavedQuizzes();
+
+        // Auto-start: skip setup and launch a focused SRS review session
+        if (isSrsAutoStart) {
+            const dueCount = parseInt(window._routeParams?.[1]);
+            if (dueCount > 0) this.count = dueCount;
+            await this.startQuiz();
+        }
     },
 
     async selectSubject(id) {
