@@ -18,7 +18,7 @@ Return ONLY valid JSON with this exact structure:
 }}
 
 Rules:
-- Generate up to 30 questions. If there are more than 30 facts, select the most important — prioritise key definitions, core facts, and named concepts.
+- Generate as many questions as the content warrants — one question per distinct fact, definition, concept, or process in the notes. Do not artificially limit or pad the count; let the density of the content determine it.
 - Every question and answer must be directly based on text that is explicitly present in the notes above. Do not infer, extrapolate, or use outside knowledge.
 - Questions must be specific and unambiguous — one clear question, one clear answer.
 - Do not create multiple questions with the same answer.

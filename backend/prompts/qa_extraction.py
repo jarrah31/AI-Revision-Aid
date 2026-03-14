@@ -31,7 +31,7 @@ Return your response as JSON with this exact structure:
 }}
 
 Rules:
-- Generate up to 30 questions per page. If there are more than 30 facts, select the 30 most important and clearly-stated ones — prioritise key definitions, core facts, and named concepts.
+- Generate as many questions as the content warrants — one question per distinct fact, definition, concept, or process on the page. Do not artificially limit or pad the count; let the density of the content determine it.
 - Every question and answer must be directly based on text that is explicitly written on the page. Do not infer, extrapolate, or use outside knowledge — if it is not stated on the page, do not create a question about it.
 - Questions must be simple, specific, and unambiguous. A student should immediately understand what fact is being asked. Avoid wordy, compound, or vague phrasing — one clear question, one clear answer.
 - Do not create multiple questions that have the same answer.
