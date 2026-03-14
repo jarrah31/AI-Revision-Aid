@@ -283,6 +283,11 @@ def init_db():
         "ALTER TABLE upload_batches ADD COLUMN source_type TEXT NOT NULL DEFAULT 'pdf'",
         # Handwritten notes OCR review
         "ALTER TABLE upload_batches ADD COLUMN is_handwritten INTEGER NOT NULL DEFAULT 0",
+        # Quiz progress persistence (cross-device)
+        "ALTER TABLE quiz_sessions ADD COLUMN category_id INTEGER DEFAULT NULL REFERENCES categories(id) ON DELETE SET NULL",
+        "ALTER TABLE quiz_sessions ADD COLUMN current_index INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE quiz_sessions ADD COLUMN questions_json TEXT DEFAULT NULL",
+        "ALTER TABLE quiz_sessions ADD COLUMN question_sources_json TEXT DEFAULT NULL",
     ]:
         try:
             db.execute(migration)

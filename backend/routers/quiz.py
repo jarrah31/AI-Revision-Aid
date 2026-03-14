@@ -30,6 +30,10 @@ class AnswerRequest(BaseModel):
     time_taken_ms: int | None = None
 
 
+class ProgressUpdate(BaseModel):
+    current_index: int
+
+
 @router.get("/count")
 def get_question_count(
     subject_id: int | None = Query(None),
@@ -54,6 +58,26 @@ def get_question_count(
     where = " AND ".join(conditions)
     row = db.execute(f"SELECT COUNT(*) FROM questions q WHERE {where}", params).fetchone()
     return {"count": row[0]}
+
+
+@router.get("/in-progress")
+def get_in_progress_quizzes(
+    user: dict = Depends(get_current_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Return all incomplete quiz sessions that have saved questions (resumable)."""
+    sessions = db.execute(
+        """SELECT qs.id, qs.quiz_mode, qs.total_questions, qs.current_index,
+                  qs.question_sources_json, qs.started_at,
+                  s.name as subject_name, c.name as category_name
+           FROM quiz_sessions qs
+           LEFT JOIN subjects s ON s.id = qs.subject_id
+           LEFT JOIN categories c ON c.id = qs.category_id
+           WHERE qs.user_id = ? AND qs.completed_at IS NULL AND qs.questions_json IS NOT NULL
+           ORDER BY qs.started_at DESC""",
+        (user["id"],),
+    ).fetchall()
+    return [dict(s) for s in sessions]
 
 
 @router.post("/start")
@@ -132,15 +156,6 @@ def start_quiz(
     if not selected:
         return {"session_id": None, "questions": [], "message": "No cards due for review"}
 
-    # Create quiz session
-    cursor = db.execute(
-        """INSERT INTO quiz_sessions (user_id, subject_id, quiz_mode, total_questions)
-           VALUES (?, ?, ?, ?)""",
-        (user["id"], req.subject_id, req.mode, len(selected)),
-    )
-    db.commit()
-    session_id = cursor.lastrowid
-
     # For MCQ mode, ensure distractors exist (usually pre-generated at approval time)
     if req.mode in ("mcq", "mixed"):
         ensure_mcq_options(selected, db, user["id"])
@@ -162,8 +177,21 @@ def start_quiz(
         else:
             q["mcq_options"] = []
 
-    return {"session_id": session_id, "questions": selected}
+    # Create quiz session — store full questions JSON for cross-device resumption
+    cursor = db.execute(
+        """INSERT INTO quiz_sessions
+               (user_id, subject_id, category_id, quiz_mode, total_questions,
+                questions_json, question_sources_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (
+            user["id"], req.subject_id, req.category_id, req.mode, len(selected),
+            json.dumps(selected), json.dumps(req.question_sources or []),
+        ),
+    )
+    db.commit()
+    session_id = cursor.lastrowid
 
+    return {"session_id": session_id, "questions": selected}
 
 
 @router.post("/{session_id}/answer")
@@ -303,7 +331,7 @@ def complete_session(
         raise HTTPException(status_code=404, detail="Session not found")
 
     db.execute(
-        "UPDATE quiz_sessions SET completed_at = datetime('now') WHERE id = ?",
+        "UPDATE quiz_sessions SET completed_at = datetime('now'), questions_json = NULL WHERE id = ?",
         (session_id,),
     )
     db.commit()
@@ -312,6 +340,82 @@ def complete_session(
         "total": session["total_questions"],
         "correct": session["correct_count"],
         "incorrect": session["incorrect_count"],
+    }
+
+
+@router.put("/{session_id}/progress")
+def update_progress(
+    session_id: int,
+    req: ProgressUpdate,
+    user: dict = Depends(get_current_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Fire-and-forget endpoint to persist the current question index."""
+    session = db.execute(
+        "SELECT id FROM quiz_sessions WHERE id = ? AND user_id = ? AND completed_at IS NULL",
+        (session_id, user["id"]),
+    ).fetchone()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    db.execute(
+        "UPDATE quiz_sessions SET current_index = ? WHERE id = ?",
+        (req.current_index, session_id),
+    )
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/{session_id}/progress")
+def abandon_quiz(
+    session_id: int,
+    user: dict = Depends(get_current_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Discard a saved in-progress quiz (marks it completed and clears stored questions)."""
+    session = db.execute(
+        "SELECT id FROM quiz_sessions WHERE id = ? AND user_id = ?",
+        (session_id, user["id"]),
+    ).fetchone()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    db.execute(
+        "UPDATE quiz_sessions SET questions_json = NULL, completed_at = datetime('now') WHERE id = ?",
+        (session_id,),
+    )
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/{session_id}/resume")
+def resume_quiz(
+    session_id: int,
+    user: dict = Depends(get_current_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Return the saved question list and progress for an in-progress session."""
+    session = db.execute(
+        """SELECT qs.*, s.name as subject_name
+           FROM quiz_sessions qs
+           LEFT JOIN subjects s ON s.id = qs.subject_id
+           WHERE qs.id = ? AND qs.user_id = ? AND qs.completed_at IS NULL
+             AND qs.questions_json IS NOT NULL""",
+        (session_id, user["id"]),
+    ).fetchone()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found or no saved progress")
+
+    session_dict = dict(session)
+    questions = json.loads(session_dict["questions_json"] or "[]")
+    question_sources = json.loads(session_dict["question_sources_json"] or "[]")
+
+    return {
+        "session_id": session_id,
+        "current_index": session_dict["current_index"],
+        "quiz_mode": session_dict["quiz_mode"],
+        "question_sources": question_sources,
+        "questions": questions,
     }
 
 
@@ -340,4 +444,9 @@ def get_session(
         (session_id,),
     ).fetchall()
 
-    return {"session": dict(session), "answers": [dict(a) for a in answers]}
+    # Exclude large fields from session dict returned to review page
+    session_dict = dict(session)
+    session_dict.pop("questions_json", None)
+    session_dict.pop("question_sources_json", None)
+
+    return {"session": session_dict, "answers": [dict(a) for a in answers]}
