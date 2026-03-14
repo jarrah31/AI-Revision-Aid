@@ -58,6 +58,7 @@ const API = {
             throw new Error(err.detail || 'Request failed');
         }
 
+        if (res.status === 204) return null;
         return res.json();
     },
 
