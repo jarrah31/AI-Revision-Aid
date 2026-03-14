@@ -37,22 +37,42 @@ class ProgressUpdate(BaseModel):
 
 def _cat_subcat_filter(category_ids: list[int] | None, subcategory_ids: list[int] | None):
     """Return (sql_fragment, params) for multi-select category/subcategory filtering.
-    Uses OR logic: questions matching any selected category OR any selected subcategory.
+
+    Narrowing logic:
+    - Only categories: include all questions from those categories.
+    - Only subcategories: include questions from those specific subcategories.
+    - Both: subcategory selections narrow their parent category; categories that have
+      NO selected subcategory are included in full.
+      e.g. categories=[Bio, Chem], subcategories=[Cells (Bio)]
+           → Cells questions  +  all Chemistry questions
+
     Returns (None, []) when neither list has entries (no filter applied).
     """
-    parts: list[str] = []
-    params: list = []
-    if category_ids:
-        ph = ",".join("?" * len(category_ids))
-        parts.append(f"q.category_id IN ({ph})")
-        params.extend(category_ids)
-    if subcategory_ids:
-        ph = ",".join("?" * len(subcategory_ids))
-        parts.append(f"q.subcategory_id IN ({ph})")
-        params.extend(subcategory_ids)
-    if not parts:
+    cats = list(category_ids) if category_ids else []
+    subs = list(subcategory_ids) if subcategory_ids else []
+
+    if not cats and not subs:
         return None, []
-    return "(" + " OR ".join(parts) + ")", params
+
+    if cats and not subs:
+        ph = ",".join("?" * len(cats))
+        return f"q.category_id IN ({ph})", cats
+
+    if subs and not cats:
+        ph = ",".join("?" * len(subs))
+        return f"q.subcategory_id IN ({ph})", subs
+
+    # Both provided: subcategories narrow their parent; unnarrowed categories included whole
+    sub_ph = ",".join("?" * len(subs))
+    cat_ph = ",".join("?" * len(cats))
+    sql = (
+        f"(q.subcategory_id IN ({sub_ph})"
+        f" OR (q.category_id IN ({cat_ph})"
+        f"     AND q.category_id NOT IN"
+        f"     (SELECT sc2.category_id FROM subcategories sc2 WHERE sc2.id IN ({sub_ph}))))"
+    )
+    # params: subs (first IN), cats, subs again (NOT IN subquery)
+    return sql, subs + cats + subs
 
 
 @router.get("/count")
