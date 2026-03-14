@@ -213,6 +213,7 @@ def process_batch(
     blend_past_papers: bool = True,
     category_id: int | None = None,
     source_type: str = "pdf",
+    subcategory_id: int | None = None,
 ):
     """Background task: process PDF pages (or uploaded images) through Claude and store results."""
     db = sqlite3.connect(str(DB_PATH))
@@ -337,15 +338,16 @@ def process_batch(
 
                     db.execute(
                         """INSERT INTO questions
-                           (batch_id, user_id, subject_id, category_id, page_number, question_text,
-                            answer_text, question_type, difficulty, image_id, source_context,
-                            question_source, question_ref)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                           (batch_id, user_id, subject_id, category_id, subcategory_id,
+                            page_number, question_text, answer_text, question_type, difficulty,
+                            image_id, source_context, question_source, question_ref)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (
                             batch_id,
                             user_id,
                             subject_id,
                             category_id,
+                            subcategory_id,
                             display_page,
                             q.get("question", ""),
                             q.get("answer", ""),
@@ -430,6 +432,7 @@ def process_batch_ocr(
     subject_id: int,
     user_id: int,
     category_id: int | None = None,
+    subcategory_id: int | None = None,
 ):
     """Background task: OCR handwritten images, store sections, set status=awaiting_ocr_review."""
     db = sqlite3.connect(str(DB_PATH))
@@ -524,6 +527,7 @@ def process_batch_from_text(
     subject_id: int,
     user_id: int,
     category_id: int | None = None,
+    subcategory_id: int | None = None,
 ):
     """Background task: generate Q&A from confirmed OCR text sections (no image re-processing)."""
     db = sqlite3.connect(str(DB_PATH))
@@ -584,12 +588,13 @@ def process_batch_from_text(
                 for q in result.get("questions", []):
                     db.execute(
                         """INSERT INTO questions
-                           (batch_id, user_id, subject_id, category_id, page_number,
-                            question_text, answer_text, question_type, difficulty,
+                           (batch_id, user_id, subject_id, category_id, subcategory_id,
+                            page_number, question_text, answer_text, question_type, difficulty,
                             source_context, question_source)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ai_generated')""",
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ai_generated')""",
                         (
-                            batch_id, user_id, subject_id, category_id, image_num,
+                            batch_id, user_id, subject_id, category_id, subcategory_id,
+                            image_num,
                             q.get("question", ""),
                             q.get("answer", ""),
                             q.get("type", "factual"),
@@ -652,6 +657,7 @@ async def upload_pdf(
     batch_type: str = Form("knowledge_organiser"),
     blend_past_papers: int = Form(1),
     category_id: int | None = Form(None),
+    subcategory_id: int | None = Form(None),
     exam_board: str | None = Form(None),
     exam_year: int | None = Form(None),
     paper_number: str | None = Form(None),
@@ -712,13 +718,13 @@ async def upload_pdf(
     # Create batch record first to get ID
     cursor = db.execute(
         """INSERT INTO upload_batches
-           (user_id, subject_id, category_id, filename, pdf_path, page_start, page_end,
-            total_pages, is_shared, status, batch_type, source_type, is_handwritten,
-            exam_board, exam_year, paper_number, tier)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)""",
+           (user_id, subject_id, category_id, subcategory_id, filename, pdf_path,
+            page_start, page_end, total_pages, is_shared, status, batch_type,
+            source_type, is_handwritten, exam_board, exam_year, paper_number, tier)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)""",
         (
-            user["id"], subject_id, category_id, filename, "", page_start, page_end,
-            page_end - page_start + 1, is_shared,
+            user["id"], subject_id, category_id, subcategory_id, filename, "",
+            page_start, page_end, page_end - page_start + 1, is_shared,
             batch_type, source_type, is_handwritten,
             exam_board if batch_type == "past_paper" else None,
             exam_year if batch_type == "past_paper" else None,
@@ -791,6 +797,7 @@ async def upload_pdf(
             subject_id,
             user["id"],
             category_id,
+            subcategory_id,
         )
     else:
         background_tasks.add_task(
@@ -807,6 +814,7 @@ async def upload_pdf(
             bool(blend_past_papers),
             category_id,
             source_type,
+            subcategory_id,
         )
 
     return {
@@ -937,6 +945,7 @@ def confirm_ocr_sections(
         batch["subject_id"],
         user["id"],
         batch["category_id"],
+        batch["subcategory_id"] if "subcategory_id" in batch.keys() else None,
     )
 
     return {"batch_id": batch_id}

@@ -191,6 +191,15 @@ def init_db():
             FOREIGN KEY (subject_id) REFERENCES subjects(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS subcategories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            category_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            UNIQUE (category_id, name),
+            FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_subcategories_category ON subcategories(category_id);
+
         CREATE TABLE IF NOT EXISTS api_usage (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
@@ -288,6 +297,10 @@ def init_db():
         "ALTER TABLE quiz_sessions ADD COLUMN current_index INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE quiz_sessions ADD COLUMN questions_json TEXT DEFAULT NULL",
         "ALTER TABLE quiz_sessions ADD COLUMN question_sources_json TEXT DEFAULT NULL",
+        # Sub-category support
+        "ALTER TABLE questions ADD COLUMN subcategory_id INTEGER DEFAULT NULL REFERENCES subcategories(id) ON DELETE SET NULL",
+        "ALTER TABLE upload_batches ADD COLUMN subcategory_id INTEGER DEFAULT NULL REFERENCES subcategories(id) ON DELETE SET NULL",
+        "ALTER TABLE quiz_sessions ADD COLUMN subcategory_id INTEGER DEFAULT NULL REFERENCES subcategories(id) ON DELETE SET NULL",
     ]:
         try:
             db.execute(migration)

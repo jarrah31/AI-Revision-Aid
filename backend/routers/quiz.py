@@ -17,6 +17,7 @@ router = APIRouter()
 class QuizStartRequest(BaseModel):
     subject_id: int | None = None
     category_id: int | None = None
+    subcategory_id: int | None = None
     count: int = 20
     mode: str = "mixed"  # flashcard, mcq, typed, mixed
     question_sources: list[str] | None = None  # e.g. ['ai_generated'], ['past_paper'], None = all
@@ -38,6 +39,7 @@ class ProgressUpdate(BaseModel):
 def get_question_count(
     subject_id: int | None = Query(None),
     category_id: int | None = Query(None),
+    subcategory_id: int | None = Query(None),
     question_sources: list[str] | None = Query(None),
     user: dict = Depends(get_current_user),
     db: sqlite3.Connection = Depends(get_db),
@@ -51,6 +53,9 @@ def get_question_count(
     if category_id:
         conditions.append("q.category_id = ?")
         params.append(category_id)
+    if subcategory_id:
+        conditions.append("q.subcategory_id = ?")
+        params.append(subcategory_id)
     if question_sources:
         placeholders = ",".join("?" * len(question_sources))
         conditions.append(f"q.question_source IN ({placeholders})")
@@ -97,6 +102,9 @@ def start_quiz(
     if req.category_id:
         conditions.append("q.category_id = ?")
         params.append(req.category_id)
+    if req.subcategory_id:
+        conditions.append("q.subcategory_id = ?")
+        params.append(req.subcategory_id)
     if req.question_sources:
         placeholders = ",".join("?" * len(req.question_sources))
         conditions.append(f"q.question_source IN ({placeholders})")
@@ -107,12 +115,14 @@ def start_quiz(
     overdue = db.execute(
         f"""SELECT q.*, sc.easiness_factor, sc.interval_days, sc.repetitions,
                    sc.next_review_date, i.filename as image_filename,
-                   s.name as subject_name, c.name as category_name
+                   s.name as subject_name, c.name as category_name,
+                   sub.name as subcategory_name
             FROM questions q
             JOIN srs_cards sc ON sc.question_id = q.id AND sc.user_id = q.user_id
             LEFT JOIN images i ON i.id = q.image_id
             LEFT JOIN subjects s ON s.id = q.subject_id
             LEFT JOIN categories c ON c.id = q.category_id
+            LEFT JOIN subcategories sub ON sub.id = q.subcategory_id
             WHERE {where} AND sc.next_review_date < ?
             ORDER BY sc.next_review_date ASC""",
         params + [today],
@@ -122,12 +132,14 @@ def start_quiz(
     due_today = db.execute(
         f"""SELECT q.*, sc.easiness_factor, sc.interval_days, sc.repetitions,
                    sc.next_review_date, i.filename as image_filename,
-                   s.name as subject_name, c.name as category_name
+                   s.name as subject_name, c.name as category_name,
+                   sub.name as subcategory_name
             FROM questions q
             JOIN srs_cards sc ON sc.question_id = q.id AND sc.user_id = q.user_id
             LEFT JOIN images i ON i.id = q.image_id
             LEFT JOIN subjects s ON s.id = q.subject_id
             LEFT JOIN categories c ON c.id = q.category_id
+            LEFT JOIN subcategories sub ON sub.id = q.subcategory_id
             WHERE {where} AND sc.next_review_date = ?""",
         params + [today],
     ).fetchall()
@@ -137,12 +149,13 @@ def start_quiz(
         f"""SELECT q.*, NULL as easiness_factor, NULL as interval_days,
                    NULL as repetitions, NULL as next_review_date,
                    i.filename as image_filename, s.name as subject_name,
-                   c.name as category_name
+                   c.name as category_name, sub.name as subcategory_name
             FROM questions q
             LEFT JOIN srs_cards sc ON sc.question_id = q.id AND sc.user_id = q.user_id
             LEFT JOIN images i ON i.id = q.image_id
             LEFT JOIN subjects s ON s.id = q.subject_id
             LEFT JOIN categories c ON c.id = q.category_id
+            LEFT JOIN subcategories sub ON sub.id = q.subcategory_id
             WHERE {where} AND sc.id IS NULL
             LIMIT {req.count}""",
         params,
@@ -180,11 +193,11 @@ def start_quiz(
     # Create quiz session — store full questions JSON for cross-device resumption
     cursor = db.execute(
         """INSERT INTO quiz_sessions
-               (user_id, subject_id, category_id, quiz_mode, total_questions,
+               (user_id, subject_id, category_id, subcategory_id, quiz_mode, total_questions,
                 questions_json, question_sources_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (
-            user["id"], req.subject_id, req.category_id, req.mode, len(selected),
+            user["id"], req.subject_id, req.category_id, req.subcategory_id, req.mode, len(selected),
             json.dumps(selected), json.dumps(req.question_sources or []),
         ),
     )
@@ -426,10 +439,12 @@ def get_session(
     db: sqlite3.Connection = Depends(get_db),
 ):
     session = db.execute(
-        """SELECT qs.*, s.name as subject_name, c.name as category_name
+        """SELECT qs.*, s.name as subject_name, c.name as category_name,
+                  sc.name as subcategory_name
            FROM quiz_sessions qs
            LEFT JOIN subjects s ON s.id = qs.subject_id
            LEFT JOIN categories c ON c.id = qs.category_id
+           LEFT JOIN subcategories sc ON sc.id = qs.subcategory_id
            WHERE qs.id = ? AND qs.user_id = ?""",
         (session_id, user["id"]),
     ).fetchone()

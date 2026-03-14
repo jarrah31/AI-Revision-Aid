@@ -4,8 +4,10 @@
     subjects: [],
     subjectId: '',
     categoryId: null,
-    subjectCategories: {},   // subject_id → [categories]
-    questionSources: [],     // [] = all; ['ai_generated'] or ['past_paper'] to restrict
+    subcategoryId: null,
+    subjectCategories: {},      // subject_id → [categories]
+    categorySubcategories: {},  // category_id → [subcategories]
+    questionSources: [],        // [] = all; ['ai_generated'] or ['past_paper'] to restrict
     count: 20,
     mode: 'mixed',
     availableCount: null,
@@ -51,6 +53,7 @@
         this.loadAvailableCount();
         this.$watch('subjectId',       () => this.loadAvailableCount());
         this.$watch('categoryId',      () => this.loadAvailableCount());
+        this.$watch('subcategoryId',   () => this.loadAvailableCount());
         this.$watch('questionSources', () => this.loadAvailableCount());
         sessionStorage.removeItem('ra_quiz'); // clean up old single-quiz key
         localStorage.removeItem('ra_quizzes'); // clean up old localStorage key
@@ -67,6 +70,7 @@
     async selectSubject(id) {
         this.subjectId = id === null ? '' : id;
         this.categoryId = null;
+        this.subcategoryId = null;
         if (id && !this.subjectCategories[id]) {
             try {
                 const cats = await API.get('/categories?subject_id=' + id);
@@ -75,12 +79,24 @@
         }
     },
 
+    async selectCategory(id) {
+        this.categoryId = id;
+        this.subcategoryId = null;
+        if (id && !this.categorySubcategories[id]) {
+            try {
+                const subs = await API.get('/subcategories?category_id=' + id);
+                this.categorySubcategories = { ...this.categorySubcategories, [id]: subs };
+            } catch (e) { /* non-critical */ }
+        }
+    },
+
     loadAvailableCount() {
         clearTimeout(this._countTimer);
         this._countTimer = setTimeout(async () => {
             const params = new URLSearchParams();
-            if (this.subjectId)  params.set('subject_id',  this.subjectId);
-            if (this.categoryId) params.set('category_id', this.categoryId);
+            if (this.subjectId)    params.set('subject_id',    this.subjectId);
+            if (this.categoryId)   params.set('category_id',   this.categoryId);
+            if (this.subcategoryId) params.set('subcategory_id', this.subcategoryId);
             this.questionSources.forEach(s => params.append('question_sources', s));
             try {
                 const res = await API.get('/quiz/count?' + params.toString());
@@ -162,6 +178,7 @@
             const res = await API.post('/quiz/start', {
                 subject_id: this.subjectId || null,
                 category_id: this.categoryId || null,
+                subcategory_id: this.subcategoryId || null,
                 question_sources: this.questionSources.length === 1 ? this.questionSources : null,
                 count: this.count,
                 mode: this.mode,
@@ -332,16 +349,38 @@
                      x-transition:enter-end="opacity-100 translate-y-0">
                     <label class="block text-sm font-medium text-gray-700 mb-2">Category</label>
                     <div class="flex flex-wrap gap-2">
-                        <button @click="categoryId = null"
+                        <button @click="selectCategory(null)"
                                 :class="!categoryId ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
                                 class="px-3 py-2 rounded-lg text-sm font-medium transition">
                             All
                         </button>
                         <template x-for="c in (subjectCategories[subjectId] || [])" :key="c.id">
-                            <button @click="categoryId = c.id"
+                            <button @click="selectCategory(c.id)"
                                     :class="categoryId === c.id ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
                                     class="px-3 py-2 rounded-lg text-sm font-medium transition"
                                     x-text="c.name">
+                            </button>
+                        </template>
+                    </div>
+                </div>
+
+                <!-- Sub-category buttons (shown when a category is selected and has subcategories) -->
+                <div x-show="categoryId && categorySubcategories[categoryId]?.length > 0"
+                     x-transition:enter="transition ease-out duration-150"
+                     x-transition:enter-start="opacity-0 -translate-y-1"
+                     x-transition:enter-end="opacity-100 translate-y-0">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Sub-Category</label>
+                    <div class="flex flex-wrap gap-2">
+                        <button @click="subcategoryId = null"
+                                :class="!subcategoryId ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
+                                class="px-3 py-2 rounded-lg text-sm font-medium transition">
+                            All
+                        </button>
+                        <template x-for="sc in (categorySubcategories[categoryId] || [])" :key="sc.id">
+                            <button @click="subcategoryId = sc.id"
+                                    :class="subcategoryId === sc.id ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
+                                    class="px-3 py-2 rounded-lg text-sm font-medium transition"
+                                    x-text="sc.name">
                             </button>
                         </template>
                     </div>

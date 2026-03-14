@@ -108,10 +108,12 @@ def quiz_history(
     db: sqlite3.Connection = Depends(get_db),
 ):
     rows = db.execute(
-        """SELECT qs.*, s.name as subject_name, c.name as category_name
+        """SELECT qs.*, s.name as subject_name, c.name as category_name,
+                  sc.name as subcategory_name
            FROM quiz_sessions qs
            LEFT JOIN subjects s ON s.id = qs.subject_id
            LEFT JOIN categories c ON c.id = qs.category_id
+           LEFT JOIN subcategories sc ON sc.id = qs.subcategory_id
            WHERE qs.user_id = ?
            ORDER BY qs.started_at DESC
            LIMIT 20""",

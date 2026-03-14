@@ -99,7 +99,9 @@
                         <p class="font-medium text-gray-800 text-sm" x-text="s.subject_name || 'All Subjects'"></p>
                         <p class="text-xs text-gray-400 mt-0.5">
                             <span x-show="s.category_name" x-text="s.category_name" class="mr-1"></span>
-                            <span x-show="s.category_name" class="mr-1">·</span>
+                            <span x-show="s.category_name && s.subcategory_name" class="mr-1"> › </span>
+                            <span x-show="s.subcategory_name" x-text="s.subcategory_name" class="mr-1"></span>
+                            <span x-show="s.category_name || s.subcategory_name" class="mr-1">·</span>
                             <span x-text="({mixed:'Mixed',flashcard:'Flashcard',mcq:'Multiple Choice',typed:'Typed'}[s.quiz_mode] || s.quiz_mode)"></span>
                             <span class="mx-1">·</span>
                             <span x-text="new Date(s.started_at).toLocaleDateString('en-GB', {day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})"></span>
