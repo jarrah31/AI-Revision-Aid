@@ -56,6 +56,10 @@ class CategoryCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
 
 
+class CategoryUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+
 class PageCategoryAssign(BaseModel):
     batch_id: int
     page_number: int

@@ -94,7 +94,45 @@ Alpine.data('subjectsPage', () => ({
         } catch (e) {
             Alpine.store('app').showToast('Failed to delete', 'error');
         }
-    }
+    },
+
+    // ── Category edit / delete ──────────────────────────────────────────────
+    showCatForm: false,
+    editingCat: null,   // { id, subject_id, name }
+    catName: '',
+    catError: '',
+
+    openEditCat(cat, subjectId) {
+        this.editingCat = { id: cat.id, subject_id: subjectId };
+        this.catName = cat.name;
+        this.catError = '';
+        this.showCatForm = true;
+    },
+
+    async saveCat() {
+        this.catError = '';
+        try {
+            await API.put('/categories/' + this.editingCat.id, { name: this.catName });
+            Alpine.store('app').showToast('Category renamed', 'success');
+            this.showCatForm = false;
+            await this.loadCategories(this.editingCat.subject_id);
+        } catch (e) {
+            this.catError = e.message;
+        }
+    },
+
+    async deleteCat(cat, subjectId) {
+        if (!confirm(`Delete category "${cat.name}" and all its questions? This cannot be undone.`)) return;
+        try {
+            await API.del('/categories/' + cat.id);
+            Alpine.store('app').showToast('Category deleted', 'success');
+            // Refresh categories and subject counts
+            this.categories = { ...this.categories, [subjectId]: undefined };
+            await Promise.all([this.load(), this.loadCategories(subjectId)]);
+        } catch (e) {
+            Alpine.store('app').showToast('Failed to delete category', 'error');
+        }
+    },
 }));
 </script>
 
@@ -137,6 +175,33 @@ Alpine.data('subjectsPage', () => ({
                         Save
                     </button>
                     <button type="button" @click="showForm = false"
+                            class="flex-1 bg-gray-100 text-gray-700 py-2 rounded-lg font-medium hover:bg-gray-200 transition">
+                        Cancel
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Category rename modal -->
+    <div x-show="showCatForm" x-transition class="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+         @click.self="showCatForm = false">
+        <div class="bg-white rounded-xl shadow-xl p-6 w-full max-w-sm">
+            <h2 class="text-lg font-semibold mb-4">Rename Category</h2>
+            <div x-show="catError" class="bg-red-50 text-red-600 text-sm rounded-lg p-3 mb-4" x-text="catError"></div>
+            <form @submit.prevent="saveCat()" class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                    <input x-model="catName" type="text" required
+                           class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+                           x-ref="catNameInput" @keydown.escape="showCatForm = false">
+                </div>
+                <div class="flex gap-3">
+                    <button type="submit"
+                            class="flex-1 bg-indigo-600 text-white py-2 rounded-lg font-medium hover:bg-indigo-700 transition">
+                        Save
+                    </button>
+                    <button type="button" @click="showCatForm = false"
                             class="flex-1 bg-gray-100 text-gray-700 py-2 rounded-lg font-medium hover:bg-gray-200 transition">
                         Cancel
                     </button>
@@ -229,22 +294,37 @@ Alpine.data('subjectsPage', () => ({
 
                         <!-- Category rows -->
                         <template x-for="cat in (categories[subject.id] || [])" :key="cat.id">
-                            <a :href="'#review-category/' + cat.id"
-                               class="flex items-center justify-between py-2.5 px-2 -mx-2 rounded-lg border-b border-gray-100 last:border-0
-                                      hover:bg-indigo-50 hover:border-transparent transition-colors cursor-pointer group">
-                                <div class="flex items-center gap-2 min-w-0">
+                            <div class="flex items-center justify-between py-2 border-b border-gray-100 last:border-0 group">
+                                <!-- Clickable name area -->
+                                <a :href="'#review-category/' + cat.id"
+                                   class="flex items-center gap-2 min-w-0 flex-1 py-0.5 rounded-lg hover:text-indigo-700 transition-colors">
                                     <span class="w-1.5 h-1.5 rounded-full shrink-0"
                                           :style="'background-color: ' + (subject.color || '#6366f1')"></span>
                                     <span class="text-sm font-medium text-gray-700 group-hover:text-indigo-700 truncate"
                                           x-text="cat.name"></span>
                                     <span class="text-xs text-gray-400 shrink-0"
                                           x-text="'(' + (cat.approved_count || 0) + '/' + (cat.question_count || 0) + ' approved)'"></span>
+                                </a>
+                                <!-- Edit / Delete buttons -->
+                                <div class="flex items-center gap-0.5 shrink-0 ml-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <button @click.prevent="openEditCat(cat, subject.id)"
+                                            class="p-1 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition"
+                                            title="Rename category">
+                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                                  d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                                        </svg>
+                                    </button>
+                                    <button @click.prevent="deleteCat(cat, subject.id)"
+                                            class="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition"
+                                            title="Delete category and questions">
+                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                                  d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                        </svg>
+                                    </button>
                                 </div>
-                                <svg class="w-4 h-4 text-gray-300 group-hover:text-indigo-500 shrink-0 transition-colors"
-                                     fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
-                                </svg>
-                            </a>
+                            </div>
                         </template>
 
                         <!-- Uncategorised row -->

@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.auth import get_current_user
 from backend.database import get_db
-from backend.models import CategoryCreate, PageCategoryAssign
+from backend.models import CategoryCreate, CategoryUpdate, PageCategoryAssign
 
 router = APIRouter()
 
@@ -64,6 +64,45 @@ def create_category(
         return {"id": cursor.lastrowid, "subject_id": req.subject_id, "name": req.name}
     except sqlite3.IntegrityError:
         raise HTTPException(status_code=400, detail="Category already exists for this subject")
+
+
+@router.put("/{category_id}")
+def update_category(
+    category_id: int,
+    req: CategoryUpdate,
+    user: dict = Depends(get_current_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Rename a category."""
+    row = db.execute("SELECT * FROM categories WHERE id = ?", (category_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Category not found")
+    try:
+        db.execute("UPDATE categories SET name = ? WHERE id = ?", (req.name, category_id))
+        db.commit()
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=400, detail="A category with that name already exists for this subject")
+    return {"id": category_id, "subject_id": row["subject_id"], "name": req.name}
+
+
+@router.delete("/{category_id}", status_code=204)
+def delete_category(
+    category_id: int,
+    user: dict = Depends(get_current_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Delete a category and all questions belonging to it (for the current user)."""
+    row = db.execute("SELECT * FROM categories WHERE id = ?", (category_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Category not found")
+    # Delete all questions in this category owned by this user
+    db.execute(
+        "DELETE FROM questions WHERE category_id = ? AND user_id = ?",
+        (category_id, user["id"]),
+    )
+    # Delete the category itself
+    db.execute("DELETE FROM categories WHERE id = ?", (category_id,))
+    db.commit()
 
 
 @router.post("/assign-page")
