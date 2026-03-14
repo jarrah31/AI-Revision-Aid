@@ -301,6 +301,9 @@ def init_db():
         "ALTER TABLE questions ADD COLUMN subcategory_id INTEGER DEFAULT NULL REFERENCES subcategories(id) ON DELETE SET NULL",
         "ALTER TABLE upload_batches ADD COLUMN subcategory_id INTEGER DEFAULT NULL REFERENCES subcategories(id) ON DELETE SET NULL",
         "ALTER TABLE quiz_sessions ADD COLUMN subcategory_id INTEGER DEFAULT NULL REFERENCES subcategories(id) ON DELETE SET NULL",
+        # Multi-select category/subcategory quiz support
+        "ALTER TABLE quiz_sessions ADD COLUMN category_ids_json TEXT DEFAULT NULL",
+        "ALTER TABLE quiz_sessions ADD COLUMN subcategory_ids_json TEXT DEFAULT NULL",
     ]:
         try:
             db.execute(migration)

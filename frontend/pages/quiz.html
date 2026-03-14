@@ -3,11 +3,11 @@
     phase: 'setup',
     subjects: [],
     subjectId: '',
-    categoryId: null,
-    subcategoryId: null,
-    subjectCategories: {},      // subject_id → [categories]
-    categorySubcategories: {},  // category_id → [subcategories]
-    questionSources: [],        // [] = all; ['ai_generated'] or ['past_paper'] to restrict
+    selectedCategoryIds: [],      // multi-select
+    selectedSubcategoryIds: [],   // multi-select
+    subjectCategories: {},        // subject_id → [categories]
+    categorySubcategories: {},    // category_id → [subcategories]
+    questionSources: [],          // [] = all; ['ai_generated'] or ['past_paper'] to restrict
     count: 20,
     mode: 'mixed',
     availableCount: null,
@@ -51,10 +51,10 @@
             this.loadingSetup = false;
         }
         this.loadAvailableCount();
-        this.$watch('subjectId',       () => this.loadAvailableCount());
-        this.$watch('categoryId',      () => this.loadAvailableCount());
-        this.$watch('subcategoryId',   () => this.loadAvailableCount());
-        this.$watch('questionSources', () => this.loadAvailableCount());
+        this.$watch('subjectId',            () => this.loadAvailableCount());
+        this.$watch('selectedCategoryIds',  () => this.loadAvailableCount());
+        this.$watch('selectedSubcategoryIds', () => this.loadAvailableCount());
+        this.$watch('questionSources',      () => this.loadAvailableCount());
         sessionStorage.removeItem('ra_quiz'); // clean up old single-quiz key
         localStorage.removeItem('ra_quizzes'); // clean up old localStorage key
         await this._loadSavedQuizzes();
@@ -69,8 +69,8 @@
 
     async selectSubject(id) {
         this.subjectId = id === null ? '' : id;
-        this.categoryId = null;
-        this.subcategoryId = null;
+        this.selectedCategoryIds = [];
+        this.selectedSubcategoryIds = [];
         if (id && !this.subjectCategories[id]) {
             try {
                 const cats = await API.get('/categories?subject_id=' + id);
@@ -79,24 +79,43 @@
         }
     },
 
-    async selectCategory(id) {
-        this.categoryId = id;
-        this.subcategoryId = null;
-        if (id && !this.categorySubcategories[id]) {
-            try {
-                const subs = await API.get('/subcategories?category_id=' + id);
-                this.categorySubcategories = { ...this.categorySubcategories, [id]: subs };
-            } catch (e) { /* non-critical */ }
+    async toggleCategory(id) {
+        if (this.selectedCategoryIds.includes(id)) {
+            // Deselect: remove this category and any of its subcategories from selection
+            this.selectedCategoryIds = this.selectedCategoryIds.filter(cid => cid !== id);
+            const subIds = (this.categorySubcategories[id] || []).map(s => s.id);
+            this.selectedSubcategoryIds = this.selectedSubcategoryIds.filter(sid => !subIds.includes(sid));
+        } else {
+            this.selectedCategoryIds = [...this.selectedCategoryIds, id];
+            if (!this.categorySubcategories[id]) {
+                try {
+                    const subs = await API.get('/subcategories?category_id=' + id);
+                    this.categorySubcategories = { ...this.categorySubcategories, [id]: subs };
+                } catch (e) { /* non-critical */ }
+            }
         }
+    },
+
+    toggleSubcategory(id) {
+        if (this.selectedSubcategoryIds.includes(id)) {
+            this.selectedSubcategoryIds = this.selectedSubcategoryIds.filter(sid => sid !== id);
+        } else {
+            this.selectedSubcategoryIds = [...this.selectedSubcategoryIds, id];
+        }
+    },
+
+    // All subcategories belonging to currently selected categories
+    visibleSubcategories() {
+        return this.selectedCategoryIds.flatMap(cid => this.categorySubcategories[cid] || []);
     },
 
     loadAvailableCount() {
         clearTimeout(this._countTimer);
         this._countTimer = setTimeout(async () => {
             const params = new URLSearchParams();
-            if (this.subjectId)    params.set('subject_id',    this.subjectId);
-            if (this.categoryId)   params.set('category_id',   this.categoryId);
-            if (this.subcategoryId) params.set('subcategory_id', this.subcategoryId);
+            if (this.subjectId) params.set('subject_id', this.subjectId);
+            this.selectedCategoryIds.forEach(id => params.append('category_ids', id));
+            this.selectedSubcategoryIds.forEach(id => params.append('subcategory_ids', id));
             this.questionSources.forEach(s => params.append('question_sources', s));
             try {
                 const res = await API.get('/quiz/count?' + params.toString());
@@ -163,6 +182,25 @@
         this.savedQuizzes = this.savedQuizzes.filter(s => s.id !== id);
     },
 
+    // Build a human-readable scope label for a quiz session (multi or legacy single)
+    sessionScopeLabel(s) {
+        if (s.category_ids_json) {
+            try {
+                const cats = JSON.parse(s.category_ids_json);
+                const subs = s.subcategory_ids_json ? JSON.parse(s.subcategory_ids_json) : [];
+                const parts = [];
+                if (cats.length > 0) parts.push(cats.map(c => c.name).join(', '));
+                if (subs.length > 0) parts.push('› ' + subs.map(sc => sc.name).join(', '));
+                return parts.join(' ') || '';
+            } catch (_) {}
+        }
+        // Legacy single-select fallback
+        const parts = [];
+        if (s.category_name) parts.push(s.category_name);
+        if (s.subcategory_name) parts.push('› ' + s.subcategory_name);
+        return parts.join(' ');
+    },
+
     async quitQuiz() {
         // Progress is already persisted after each question — just return to setup
         this.sessionId = null;
@@ -177,8 +215,8 @@
         try {
             const res = await API.post('/quiz/start', {
                 subject_id: this.subjectId || null,
-                category_id: this.categoryId || null,
-                subcategory_id: this.subcategoryId || null,
+                category_ids: this.selectedCategoryIds.length > 0 ? this.selectedCategoryIds : null,
+                subcategory_ids: this.selectedSubcategoryIds.length > 0 ? this.selectedSubcategoryIds : null,
                 question_sources: this.questionSources.length === 1 ? this.questionSources : null,
                 count: this.count,
                 mode: this.mode,
@@ -347,16 +385,21 @@
                      x-transition:enter="transition ease-out duration-150"
                      x-transition:enter-start="opacity-0 -translate-y-1"
                      x-transition:enter-end="opacity-100 translate-y-0">
-                    <label class="block text-sm font-medium text-gray-700 mb-2">Category</label>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Category
+                        <span x-show="selectedCategoryIds.length > 0"
+                              class="ml-1 text-xs font-normal text-indigo-500"
+                              x-text="'(' + selectedCategoryIds.length + ' selected)'"></span>
+                    </label>
+                    <p class="text-xs text-gray-400 mb-2">Select one or more — leave all unselected for the whole subject.</p>
                     <div class="flex flex-wrap gap-2">
-                        <button @click="selectCategory(null)"
-                                :class="!categoryId ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
+                        <button @click="selectedCategoryIds = []; selectedSubcategoryIds = []"
+                                :class="selectedCategoryIds.length === 0 ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
                                 class="px-3 py-2 rounded-lg text-sm font-medium transition">
                             All
                         </button>
                         <template x-for="c in (subjectCategories[subjectId] || [])" :key="c.id">
-                            <button @click="selectCategory(c.id)"
-                                    :class="categoryId === c.id ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
+                            <button @click="toggleCategory(c.id)"
+                                    :class="selectedCategoryIds.includes(c.id) ? 'bg-indigo-600 text-white ring-2 ring-indigo-300' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
                                     class="px-3 py-2 rounded-lg text-sm font-medium transition"
                                     x-text="c.name">
                             </button>
@@ -364,21 +407,26 @@
                     </div>
                 </div>
 
-                <!-- Sub-category buttons (shown when a category is selected and has subcategories) -->
-                <div x-show="categoryId && categorySubcategories[categoryId]?.length > 0"
+                <!-- Sub-category buttons (shown when selected categories have subcategories) -->
+                <div x-show="visibleSubcategories().length > 0"
                      x-transition:enter="transition ease-out duration-150"
                      x-transition:enter-start="opacity-0 -translate-y-1"
                      x-transition:enter-end="opacity-100 translate-y-0">
-                    <label class="block text-sm font-medium text-gray-700 mb-2">Sub-Category</label>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Sub-Category
+                        <span x-show="selectedSubcategoryIds.length > 0"
+                              class="ml-1 text-xs font-normal text-indigo-500"
+                              x-text="'(' + selectedSubcategoryIds.length + ' selected)'"></span>
+                    </label>
+                    <p class="text-xs text-gray-400 mb-2">Select one or more — leave all unselected to include every sub-category.</p>
                     <div class="flex flex-wrap gap-2">
-                        <button @click="subcategoryId = null"
-                                :class="!subcategoryId ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
+                        <button @click="selectedSubcategoryIds = []"
+                                :class="selectedSubcategoryIds.length === 0 ? 'bg-violet-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
                                 class="px-3 py-2 rounded-lg text-sm font-medium transition">
                             All
                         </button>
-                        <template x-for="sc in (categorySubcategories[categoryId] || [])" :key="sc.id">
-                            <button @click="subcategoryId = sc.id"
-                                    :class="subcategoryId === sc.id ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
+                        <template x-for="sc in visibleSubcategories()" :key="sc.id">
+                            <button @click="toggleSubcategory(sc.id)"
+                                    :class="selectedSubcategoryIds.includes(sc.id) ? 'bg-violet-600 text-white ring-2 ring-violet-300' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
                                     class="px-3 py-2 rounded-lg text-sm font-medium transition"
                                     x-text="sc.name">
                             </button>
@@ -477,7 +525,9 @@
                         <div class="flex items-start justify-between gap-2 mb-3">
                             <div class="min-w-0">
                                 <p class="font-medium text-gray-800 text-sm truncate" x-text="sq.subject_name || 'All Subjects'"></p>
-                                <p x-show="sq.category_name" class="text-xs text-gray-400 mt-0.5 truncate" x-text="sq.category_name"></p>
+                                <p class="text-xs text-gray-400 mt-0.5 truncate"
+                                   x-show="sq.category_ids_json || sq.category_name"
+                                   x-text="sessionScopeLabel(sq)"></p>
                             </div>
                             <button @click="deleteSavedQuiz(sq.id)"
                                     class="text-gray-300 hover:text-red-400 transition shrink-0 mt-0.5"

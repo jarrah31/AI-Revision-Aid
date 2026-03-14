@@ -21,6 +21,24 @@
     sessionAccuracy(s) {
         const total = s.correct_count + s.incorrect_count;
         return total > 0 ? Math.round(s.correct_count / total * 100) : 0;
+    },
+
+    sessionScopeLabel(s) {
+        if (s.category_ids_json) {
+            try {
+                const cats = JSON.parse(s.category_ids_json);
+                const subs = s.subcategory_ids_json ? JSON.parse(s.subcategory_ids_json) : [];
+                const parts = [];
+                if (cats.length > 0) parts.push(cats.map(c => c.name).join(', '));
+                if (subs.length > 0) parts.push('› ' + subs.map(sc => sc.name).join(', '));
+                return parts.join(' ') || '';
+            } catch (_) {}
+        }
+        // Legacy single-select fallback
+        const parts = [];
+        if (s.category_name) parts.push(s.category_name);
+        if (s.subcategory_name) parts.push('› ' + s.subcategory_name);
+        return parts.join(' ');
     }
 }">
     <h1 class="text-2xl font-bold text-gray-800 mb-6">Dashboard</h1>
@@ -98,10 +116,8 @@
                     <div>
                         <p class="font-medium text-gray-800 text-sm" x-text="s.subject_name || 'All Subjects'"></p>
                         <p class="text-xs text-gray-400 mt-0.5">
-                            <span x-show="s.category_name" x-text="s.category_name" class="mr-1"></span>
-                            <span x-show="s.category_name && s.subcategory_name" class="mr-1"> › </span>
-                            <span x-show="s.subcategory_name" x-text="s.subcategory_name" class="mr-1"></span>
-                            <span x-show="s.category_name || s.subcategory_name" class="mr-1">·</span>
+                            <span x-show="sessionScopeLabel(s)" x-text="sessionScopeLabel(s)" class="mr-1"></span>
+                            <span x-show="sessionScopeLabel(s)" class="mr-1">·</span>
                             <span x-text="({mixed:'Mixed',flashcard:'Flashcard',mcq:'Multiple Choice',typed:'Typed'}[s.quiz_mode] || s.quiz_mode)"></span>
                             <span class="mx-1">·</span>
                             <span x-text="new Date(s.started_at).toLocaleDateString('en-GB', {day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})"></span>

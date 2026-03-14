@@ -16,8 +16,8 @@ router = APIRouter()
 
 class QuizStartRequest(BaseModel):
     subject_id: int | None = None
-    category_id: int | None = None
-    subcategory_id: int | None = None
+    category_ids: list[int] | None = None      # multi-select
+    subcategory_ids: list[int] | None = None   # multi-select
     count: int = 20
     mode: str = "mixed"  # flashcard, mcq, typed, mixed
     question_sources: list[str] | None = None  # e.g. ['ai_generated'], ['past_paper'], None = all
@@ -35,11 +35,31 @@ class ProgressUpdate(BaseModel):
     current_index: int
 
 
+def _cat_subcat_filter(category_ids: list[int] | None, subcategory_ids: list[int] | None):
+    """Return (sql_fragment, params) for multi-select category/subcategory filtering.
+    Uses OR logic: questions matching any selected category OR any selected subcategory.
+    Returns (None, []) when neither list has entries (no filter applied).
+    """
+    parts: list[str] = []
+    params: list = []
+    if category_ids:
+        ph = ",".join("?" * len(category_ids))
+        parts.append(f"q.category_id IN ({ph})")
+        params.extend(category_ids)
+    if subcategory_ids:
+        ph = ",".join("?" * len(subcategory_ids))
+        parts.append(f"q.subcategory_id IN ({ph})")
+        params.extend(subcategory_ids)
+    if not parts:
+        return None, []
+    return "(" + " OR ".join(parts) + ")", params
+
+
 @router.get("/count")
 def get_question_count(
     subject_id: int | None = Query(None),
-    category_id: int | None = Query(None),
-    subcategory_id: int | None = Query(None),
+    category_ids: list[int] | None = Query(None),
+    subcategory_ids: list[int] | None = Query(None),
     question_sources: list[str] | None = Query(None),
     user: dict = Depends(get_current_user),
     db: sqlite3.Connection = Depends(get_db),
@@ -50,12 +70,10 @@ def get_question_count(
     if subject_id:
         conditions.append("q.subject_id = ?")
         params.append(subject_id)
-    if category_id:
-        conditions.append("q.category_id = ?")
-        params.append(category_id)
-    if subcategory_id:
-        conditions.append("q.subcategory_id = ?")
-        params.append(subcategory_id)
+    cat_filter, cat_params = _cat_subcat_filter(category_ids, subcategory_ids)
+    if cat_filter:
+        conditions.append(cat_filter)
+        params.extend(cat_params)
     if question_sources:
         placeholders = ",".join("?" * len(question_sources))
         conditions.append(f"q.question_source IN ({placeholders})")
@@ -74,6 +92,7 @@ def get_in_progress_quizzes(
     sessions = db.execute(
         """SELECT qs.id, qs.quiz_mode, qs.total_questions, qs.current_index,
                   qs.question_sources_json, qs.started_at,
+                  qs.category_ids_json, qs.subcategory_ids_json,
                   s.name as subject_name, c.name as category_name
            FROM quiz_sessions qs
            LEFT JOIN subjects s ON s.id = qs.subject_id
@@ -99,12 +118,10 @@ def start_quiz(
     if req.subject_id:
         conditions.append("q.subject_id = ?")
         params.append(req.subject_id)
-    if req.category_id:
-        conditions.append("q.category_id = ?")
-        params.append(req.category_id)
-    if req.subcategory_id:
-        conditions.append("q.subcategory_id = ?")
-        params.append(req.subcategory_id)
+    cat_filter, cat_params = _cat_subcat_filter(req.category_ids, req.subcategory_ids)
+    if cat_filter:
+        conditions.append(cat_filter)
+        params.extend(cat_params)
     if req.question_sources:
         placeholders = ",".join("?" * len(req.question_sources))
         conditions.append(f"q.question_source IN ({placeholders})")
@@ -190,14 +207,35 @@ def start_quiz(
         else:
             q["mcq_options"] = []
 
+    # Look up names for the selected categories/subcategories (stored for display)
+    def _fetch_named_items(table: str, ids: list[int]) -> list[dict]:
+        if not ids:
+            return []
+        rows = db.execute(
+            f"SELECT id, name FROM {table} WHERE id IN ({','.join('?' * len(ids))})", ids
+        ).fetchall()
+        name_map = {r["id"]: r["name"] for r in rows}
+        return [{"id": i, "name": name_map.get(i, "")} for i in ids]
+
+    cat_items = _fetch_named_items("categories", req.category_ids or [])
+    subcat_items = _fetch_named_items("subcategories", req.subcategory_ids or [])
+
+    # first IDs for backward-compat category_id / subcategory_id columns
+    first_cat_id = req.category_ids[0] if req.category_ids else None
+    first_subcat_id = req.subcategory_ids[0] if req.subcategory_ids else None
+
     # Create quiz session — store full questions JSON for cross-device resumption
     cursor = db.execute(
         """INSERT INTO quiz_sessions
-               (user_id, subject_id, category_id, subcategory_id, quiz_mode, total_questions,
-                questions_json, question_sources_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+               (user_id, subject_id, category_id, subcategory_id,
+                category_ids_json, subcategory_ids_json,
+                quiz_mode, total_questions, questions_json, question_sources_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
-            user["id"], req.subject_id, req.category_id, req.subcategory_id, req.mode, len(selected),
+            user["id"], req.subject_id, first_cat_id, first_subcat_id,
+            json.dumps(cat_items) if cat_items else None,
+            json.dumps(subcat_items) if subcat_items else None,
+            req.mode, len(selected),
             json.dumps(selected), json.dumps(req.question_sources or []),
         ),
     )
