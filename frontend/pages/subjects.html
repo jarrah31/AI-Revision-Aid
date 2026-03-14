@@ -17,6 +17,17 @@ Alpine.data('subjectsPage', () => ({
     subcategories: {},    // { [category_id]: [...] }
     loadingSubcats: {},   // { [category_id]: bool }
 
+    // Convert category → sub-category state
+    showConvertForm: false,
+    convertingCat: null,           // { id, name, subject_id }
+    convertParentCatId: null,
+    convertMode: 'new',            // 'new' | 'existing'
+    convertSubcatName: '',
+    convertExistingSubcatId: null,
+    convertParentSubcats: [],
+    convertLoadingSubcats: false,
+    convertError: '',
+
     async init() {
         await this.load();
     },
@@ -230,6 +241,83 @@ Alpine.data('subjectsPage', () => ({
             Alpine.store('app').showToast('Failed to delete sub-category', 'error');
         }
     },
+
+    // ── Convert category → sub-category ────────────────────────────────────
+    openConvertCat(cat, subjectId) {
+        this.convertingCat = { id: cat.id, name: cat.name, subject_id: subjectId };
+        this.convertParentCatId = null;
+        this.convertMode = 'new';
+        this.convertSubcatName = cat.name;
+        this.convertExistingSubcatId = null;
+        this.convertParentSubcats = [];
+        this.convertError = '';
+        this.showConvertForm = true;
+    },
+
+    async onConvertParentChange() {
+        this.convertExistingSubcatId = null;
+        this.convertParentSubcats = [];
+        if (this.convertParentCatId && this.convertMode === 'existing') {
+            await this.loadConvertParentSubcats();
+        }
+    },
+
+    async onConvertModeChange() {
+        this.convertExistingSubcatId = null;
+        this.convertParentSubcats = [];
+        if (this.convertMode === 'existing' && this.convertParentCatId) {
+            await this.loadConvertParentSubcats();
+        }
+    },
+
+    async loadConvertParentSubcats() {
+        if (!this.convertParentCatId) return;
+        this.convertLoadingSubcats = true;
+        try {
+            this.convertParentSubcats = await API.get('/subcategories?category_id=' + this.convertParentCatId);
+        } catch (e) {
+            this.convertParentSubcats = [];
+        } finally {
+            this.convertLoadingSubcats = false;
+        }
+    },
+
+    async saveConvert() {
+        this.convertError = '';
+        if (!this.convertParentCatId) {
+            this.convertError = 'Please select a parent category';
+            return;
+        }
+        const body = { parent_category_id: parseInt(this.convertParentCatId) };
+        if (this.convertMode === 'existing') {
+            if (!this.convertExistingSubcatId) {
+                this.convertError = 'Please select an existing sub-category';
+                return;
+            }
+            body.existing_subcategory_id = this.convertExistingSubcatId;
+        } else {
+            if (!this.convertSubcatName.trim()) {
+                this.convertError = 'Please enter a sub-category name';
+                return;
+            }
+            body.subcategory_name = this.convertSubcatName.trim();
+        }
+        try {
+            await API.post('/categories/' + this.convertingCat.id + '/convert-to-subcategory', body);
+            Alpine.store('app').showToast('Category converted to sub-category', 'success');
+            this.showConvertForm = false;
+            const sid = this.convertingCat.subject_id;
+            // Invalidate caches for old category and parent subcategories
+            const { [this.convertingCat.id]: _sc1, [this.convertParentCatId]: _sc2, ...restSubcats } = this.subcategories;
+            this.subcategories = restSubcats;
+            const { [this.convertingCat.id]: _ec, ...restExp } = this.expandedCats;
+            this.expandedCats = restExp;
+            this.categories = { ...this.categories, [sid]: undefined };
+            await Promise.all([this.load(), this.loadCategories(sid)]);
+        } catch (e) {
+            this.convertError = e.message;
+        }
+    },
 }));
 </script>
 
@@ -361,6 +449,89 @@ Alpine.data('subjectsPage', () => ({
         </div>
     </div>
 
+    <!-- Convert category to sub-category modal -->
+    <div x-show="showConvertForm" x-transition class="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+         @click.self="showConvertForm = false">
+        <div class="bg-white rounded-xl shadow-xl p-6 w-full max-w-sm">
+            <h2 class="text-lg font-semibold mb-1">Convert to Sub-Category</h2>
+            <p class="text-sm text-gray-500 mb-4">
+                Move <span class="font-medium text-gray-700" x-text="'&ldquo;' + convertingCat?.name + '&rdquo;'"></span>
+                and all your questions into a sub-category of another category.
+            </p>
+            <div x-show="convertError" class="bg-red-50 text-red-600 text-sm rounded-lg p-3 mb-4" x-text="convertError"></div>
+            <form @submit.prevent="saveConvert()" class="space-y-4">
+
+                <!-- Parent category select -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Parent Category <span class="text-red-500">*</span></label>
+                    <select x-model.number="convertParentCatId" @change="onConvertParentChange()" required
+                            class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                        <option :value="null">— Select a category —</option>
+                        <template x-for="c in (categories[convertingCat?.subject_id] || []).filter(c => c.id !== convertingCat?.id)" :key="c.id">
+                            <option :value="c.id" x-text="c.name" :selected="c.id === convertParentCatId"></option>
+                        </template>
+                    </select>
+                </div>
+
+                <!-- New vs existing toggle -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Sub-Category</label>
+                    <div class="flex rounded-lg border border-gray-200 p-1 bg-gray-50 mb-3">
+                        <button type="button" @click="convertMode = 'new'; onConvertModeChange()"
+                                :class="convertMode === 'new' ? 'bg-white shadow-sm text-indigo-600 font-semibold' : 'text-gray-500 hover:text-gray-700'"
+                                class="flex-1 py-1.5 px-3 rounded-md text-sm transition-all">
+                            Create New
+                        </button>
+                        <button type="button" @click="convertMode = 'existing'; onConvertModeChange()"
+                                :class="convertMode === 'existing' ? 'bg-white shadow-sm text-indigo-600 font-semibold' : 'text-gray-500 hover:text-gray-700'"
+                                class="flex-1 py-1.5 px-3 rounded-md text-sm transition-all">
+                            Use Existing
+                        </button>
+                    </div>
+
+                    <!-- New: name input -->
+                    <div x-show="convertMode === 'new'">
+                        <input x-model="convertSubcatName" type="text" required placeholder="Sub-category name"
+                               class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                        <p class="text-xs text-gray-400 mt-1">Pre-filled with the current category name — edit if needed.</p>
+                    </div>
+
+                    <!-- Existing: subcategory dropdown -->
+                    <div x-show="convertMode === 'existing'">
+                        <div x-show="convertLoadingSubcats" class="text-xs text-gray-400 py-2">Loading sub-categories…</div>
+                        <div x-show="!convertLoadingSubcats && !convertParentCatId" class="text-xs text-gray-400 py-2 italic">
+                            Select a parent category first.
+                        </div>
+                        <div x-show="!convertLoadingSubcats && convertParentCatId && convertParentSubcats.length === 0"
+                             class="text-xs text-amber-600 py-2">
+                            No sub-categories exist under the selected category yet.
+                            Switch to "Create New" to add one.
+                        </div>
+                        <select x-show="!convertLoadingSubcats && convertParentSubcats.length > 0"
+                                x-model.number="convertExistingSubcatId"
+                                class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                            <option :value="null">— Select sub-category —</option>
+                            <template x-for="sc in convertParentSubcats" :key="sc.id">
+                                <option :value="sc.id" x-text="sc.name" :selected="sc.id === convertExistingSubcatId"></option>
+                            </template>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="flex gap-3">
+                    <button type="submit"
+                            class="flex-1 bg-indigo-600 text-white py-2 rounded-lg font-medium hover:bg-indigo-700 transition">
+                        Convert
+                    </button>
+                    <button type="button" @click="showConvertForm = false"
+                            class="flex-1 bg-gray-100 text-gray-700 py-2 rounded-lg font-medium hover:bg-gray-200 transition">
+                        Cancel
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- Loading -->
     <div x-show="loading" class="text-center py-8 text-gray-400">Loading...</div>
 
@@ -464,7 +635,7 @@ Alpine.data('subjectsPage', () => ({
                                         <span class="text-xs text-gray-400 shrink-0"
                                               x-text="'(' + (cat.approved_count || 0) + '/' + (cat.question_count || 0) + ' approved)'"></span>
                                     </div>
-                                    <!-- Edit / Delete buttons -->
+                                    <!-- Edit / Convert / Delete buttons -->
                                     <div class="flex items-center gap-0.5 shrink-0 ml-2 opacity-0 group-hover:opacity-100 transition-opacity">
                                         <button @click.stop="openEditCat(cat, subject.id)"
                                                 class="p-1 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition"
@@ -472,6 +643,15 @@ Alpine.data('subjectsPage', () => ({
                                             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                                                       d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                                            </svg>
+                                        </button>
+                                        <button @click.stop="openConvertCat(cat, subject.id)"
+                                                x-show="(categories[subject.id] || []).length > 1"
+                                                class="p-1 text-gray-400 hover:text-violet-600 hover:bg-violet-50 rounded transition"
+                                                title="Convert to sub-category">
+                                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                                      d="M19 9l-7 7-7-7"/>
                                             </svg>
                                         </button>
                                         <button @click.stop="deleteCat(cat, subject.id)"

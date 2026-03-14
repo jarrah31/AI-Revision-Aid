@@ -64,3 +64,9 @@ class PageCategoryAssign(BaseModel):
     batch_id: int
     page_number: int
     category_id: int | None = None  # None removes the category
+
+
+class ConvertToSubcategoryRequest(BaseModel):
+    parent_category_id: int
+    subcategory_name: str | None = Field(default=None, min_length=1, max_length=100)
+    existing_subcategory_id: int | None = None
