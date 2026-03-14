@@ -238,6 +238,24 @@
         }
     },
 
+    async skipQuestion() {
+        const elapsed = Date.now() - this.startTime;
+        this.submitting = true;
+        try {
+            await API.post('/quiz/' + this.sessionId + '/answer', {
+                question_id: this.currentQuestion.id,
+                quiz_format: this.currentFormat,
+                is_skipped: true,
+                time_taken_ms: elapsed,
+            });
+        } catch (e) {
+            // Advance even if save fails
+        } finally {
+            this.submitting = false;
+        }
+        this.nextQuestion();
+    },
+
     resetCard() {
         this.showAnswer = false;
         this.typedAnswer = '';
@@ -598,10 +616,14 @@
             <!-- FLASHCARD FORMAT -->
             <div x-show="currentFormat === 'flashcard'">
                 <!-- Pre-reveal -->
-                <div x-show="!showAnswer" class="text-center">
+                <div x-show="!showAnswer" class="flex items-center justify-center gap-3">
                     <button @click="revealFlashcard()"
                             class="bg-indigo-600 text-white px-6 py-3 rounded-lg font-medium hover:bg-indigo-700 transition">
                         Show Answer
+                    </button>
+                    <button @click="skipQuestion()" :disabled="submitting"
+                            class="px-4 py-3 rounded-lg text-sm font-medium text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition disabled:opacity-50">
+                        Skip
                     </button>
                 </div>
                 <!-- Post-reveal: answer + rate + next -->
@@ -649,11 +671,17 @@
                             x-text="opt.option_text">
                     </button>
                 </template>
-                <button @click="submitMCQ()" :disabled="!selectedOption || submitting"
-                        class="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 transition mt-3">
-                    <span x-show="!submitting">Submit</span>
-                    <span x-show="submitting">Checking...</span>
-                </button>
+                <div class="flex gap-2 mt-3">
+                    <button @click="submitMCQ()" :disabled="!selectedOption || submitting"
+                            class="flex-1 bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 transition">
+                        <span x-show="!submitting">Submit</span>
+                        <span x-show="submitting">Checking...</span>
+                    </button>
+                    <button @click="skipQuestion()" :disabled="submitting"
+                            class="px-4 py-2.5 rounded-lg text-sm font-medium text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition disabled:opacity-50">
+                        Skip
+                    </button>
+                </div>
             </div>
 
             <!-- TYPED FORMAT -->
@@ -661,11 +689,17 @@
                 <textarea x-model="typedAnswer" rows="3" placeholder="Type your answer..."
                           @keydown.ctrl.enter="submitTyped()"
                           class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm"></textarea>
-                <button @click="submitTyped()" :disabled="!typedAnswer.trim() || submitting"
-                        class="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 transition">
-                    <span x-show="!submitting">Submit Answer</span>
-                    <span x-show="submitting">AI is judging...</span>
-                </button>
+                <div class="flex gap-2">
+                    <button @click="submitTyped()" :disabled="!typedAnswer.trim() || submitting"
+                            class="flex-1 bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 transition">
+                        <span x-show="!submitting">Submit Answer</span>
+                        <span x-show="submitting">AI is judging...</span>
+                    </button>
+                    <button @click="skipQuestion()" :disabled="submitting"
+                            class="px-4 py-2.5 rounded-lg text-sm font-medium text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition disabled:opacity-50">
+                        Skip
+                    </button>
+                </div>
             </div>
 
             <!-- RESULT (shown after MCQ/Typed answer only) -->
@@ -725,7 +759,7 @@
                 <p class="text-gray-500 mt-1">accuracy</p>
             </div>
 
-            <div class="grid grid-cols-3 gap-4 mb-6">
+            <div class="grid grid-cols-4 gap-3 mb-6">
                 <div class="bg-green-50 rounded-lg p-3">
                     <div class="text-xl font-bold text-green-600" x-text="summary?.correct || 0"></div>
                     <div class="text-xs text-green-700">Correct</div>
@@ -733,6 +767,10 @@
                 <div class="bg-red-50 rounded-lg p-3">
                     <div class="text-xl font-bold text-red-600" x-text="summary?.incorrect || 0"></div>
                     <div class="text-xs text-red-700">Incorrect</div>
+                </div>
+                <div class="bg-amber-50 rounded-lg p-3">
+                    <div class="text-xl font-bold text-amber-500" x-text="summary?.skipped || 0"></div>
+                    <div class="text-xs text-amber-600">Skipped</div>
                 </div>
                 <div class="bg-gray-50 rounded-lg p-3">
                     <div class="text-xl font-bold text-gray-600" x-text="summary?.total || 0"></div>

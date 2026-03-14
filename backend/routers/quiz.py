@@ -29,6 +29,7 @@ class AnswerRequest(BaseModel):
     student_answer: str | None = None
     quality_rating: int | None = None  # for flashcard self-rating
     time_taken_ms: int | None = None
+    is_skipped: bool = False
 
 
 class ProgressUpdate(BaseModel):
@@ -291,6 +292,47 @@ def submit_answer(
     if not question:
         raise HTTPException(status_code=404, detail="Question not found")
 
+    # ── Skip fast-path ────────────────────────────────────────────────────────
+    if req.is_skipped:
+        db.execute(
+            """INSERT INTO quiz_answers
+               (session_id, question_id, quiz_format, student_answer, is_correct,
+                quality_rating, time_taken_ms, ai_feedback, is_skipped)
+               VALUES (?, ?, ?, NULL, 0, 1, ?, NULL, 1)""",
+            (session_id, req.question_id, req.quiz_format, req.time_taken_ms),
+        )
+        db.execute(
+            "UPDATE quiz_sessions SET skipped_count = skipped_count + 1 WHERE id = ?",
+            (session_id,),
+        )
+        # Treat skip as quality=1 (worst) so the card surfaces again soon
+        srs = db.execute(
+            "SELECT * FROM srs_cards WHERE user_id = ? AND question_id = ?",
+            (user["id"], req.question_id),
+        ).fetchone()
+        update = sm2_update(1, srs["easiness_factor"], srs["interval_days"], srs["repetitions"]) if srs else sm2_update(1)
+        if srs:
+            db.execute(
+                """UPDATE srs_cards
+                   SET easiness_factor = ?, interval_days = ?, repetitions = ?,
+                       next_review_date = ?, last_reviewed_at = datetime('now')
+                   WHERE id = ?""",
+                (update.easiness_factor, update.interval_days, update.repetitions,
+                 update.next_review_date.isoformat(), srs["id"]),
+            )
+        else:
+            db.execute(
+                """INSERT INTO srs_cards
+                   (user_id, question_id, easiness_factor, interval_days, repetitions,
+                    next_review_date, last_reviewed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, datetime('now'))""",
+                (user["id"], req.question_id, update.easiness_factor, update.interval_days,
+                 update.repetitions, update.next_review_date.isoformat()),
+            )
+        db.commit()
+        return {"is_correct": False, "correct_answer": question["answer_text"], "feedback": None, "quality": 1}
+    # ─────────────────────────────────────────────────────────────────────────
+
     is_correct = None
     ai_feedback = None
     quality = req.quality_rating
@@ -338,8 +380,8 @@ def submit_answer(
     db.execute(
         """INSERT INTO quiz_answers
            (session_id, question_id, quiz_format, student_answer, is_correct,
-            quality_rating, time_taken_ms, ai_feedback)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            quality_rating, time_taken_ms, ai_feedback, is_skipped)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)""",
         (session_id, req.question_id, req.quiz_format, req.student_answer,
          is_correct, quality, req.time_taken_ms, ai_feedback),
     )
@@ -411,6 +453,7 @@ def complete_session(
         "total": session["total_questions"],
         "correct": session["correct_count"],
         "incorrect": session["incorrect_count"],
+        "skipped": session["skipped_count"],
     }
 
 

@@ -304,6 +304,8 @@ def init_db():
         # Multi-select category/subcategory quiz support
         "ALTER TABLE quiz_sessions ADD COLUMN category_ids_json TEXT DEFAULT NULL",
         "ALTER TABLE quiz_sessions ADD COLUMN subcategory_ids_json TEXT DEFAULT NULL",
+        # Skip tracking
+        "ALTER TABLE quiz_answers ADD COLUMN is_skipped INTEGER NOT NULL DEFAULT 0",
     ]:
         try:
             db.execute(migration)
