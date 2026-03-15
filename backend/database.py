@@ -306,6 +306,8 @@ def init_db():
         "ALTER TABLE quiz_sessions ADD COLUMN subcategory_ids_json TEXT DEFAULT NULL",
         # Skip tracking
         "ALTER TABLE quiz_answers ADD COLUMN is_skipped INTEGER NOT NULL DEFAULT 0",
+        # Multi-mode quiz support
+        "ALTER TABLE quiz_sessions ADD COLUMN quiz_modes_json TEXT DEFAULT NULL",
     ]:
         try:
             db.execute(migration)

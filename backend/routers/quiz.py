@@ -19,7 +19,7 @@ class QuizStartRequest(BaseModel):
     category_ids: list[int] | None = None      # multi-select
     subcategory_ids: list[int] | None = None   # multi-select
     count: int = 20
-    mode: str = "mixed"  # flashcard, mcq, typed, mixed
+    modes: list[str] | None = None  # e.g. ['flashcard','typed']; None/empty = all three
     question_sources: list[str] | None = None  # e.g. ['ai_generated'], ['past_paper'], None = all
 
 
@@ -111,7 +111,7 @@ def get_in_progress_quizzes(
 ):
     """Return all incomplete quiz sessions that have saved questions (resumable)."""
     sessions = db.execute(
-        """SELECT qs.id, qs.quiz_mode, qs.total_questions, qs.current_index,
+        """SELECT qs.id, qs.quiz_mode, qs.quiz_modes_json, qs.total_questions, qs.current_index,
                   qs.question_sources_json, qs.started_at,
                   qs.category_ids_json, qs.subcategory_ids_json,
                   s.name as subject_name, c.name as category_name
@@ -208,7 +208,8 @@ def start_quiz(
         return {"session_id": None, "questions": [], "message": "No cards due for review"}
 
     # For MCQ mode, ensure distractors exist (usually pre-generated at approval time)
-    if req.mode in ("mcq", "mixed"):
+    effective_modes = req.modes if req.modes else ["flashcard", "mcq", "typed"]
+    if "mcq" in effective_modes:
         ensure_mcq_options(selected, db, user["id"])
 
     # Add MCQ options to questions that have them (max 4: 1 correct + 3 distractors)
@@ -245,18 +246,28 @@ def start_quiz(
     first_cat_id = req.category_ids[0] if req.category_ids else None
     first_subcat_id = req.subcategory_ids[0] if req.subcategory_ids else None
 
+    # Derive legacy quiz_mode string for backward compat
+    if not req.modes or len(req.modes) == 0:
+        legacy_mode = "mixed"
+    elif len(req.modes) == 1:
+        legacy_mode = req.modes[0]
+    else:
+        legacy_mode = "mixed"
+
     # Create quiz session — store full questions JSON for cross-device resumption
     cursor = db.execute(
         """INSERT INTO quiz_sessions
                (user_id, subject_id, category_id, subcategory_id,
                 category_ids_json, subcategory_ids_json,
-                quiz_mode, total_questions, questions_json, question_sources_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                quiz_mode, quiz_modes_json, total_questions, questions_json, question_sources_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             user["id"], req.subject_id, first_cat_id, first_subcat_id,
             json.dumps(cat_items) if cat_items else None,
             json.dumps(subcat_items) if subcat_items else None,
-            req.mode, len(selected),
+            legacy_mode,
+            json.dumps(req.modes) if req.modes else None,
+            len(selected),
             json.dumps(selected), json.dumps(req.question_sources or []),
         ),
     )
@@ -524,10 +535,13 @@ def resume_quiz(
     questions = json.loads(session_dict["questions_json"] or "[]")
     question_sources = json.loads(session_dict["question_sources_json"] or "[]")
 
+    quiz_modes = json.loads(session_dict["quiz_modes_json"] or "null")
+
     return {
         "session_id": session_id,
         "current_index": session_dict["current_index"],
         "quiz_mode": session_dict["quiz_mode"],
+        "quiz_modes": quiz_modes,
         "question_sources": question_sources,
         "questions": questions,
     }

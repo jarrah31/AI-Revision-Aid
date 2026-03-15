@@ -9,7 +9,7 @@
     categorySubcategories: {},    // category_id → [subcategories]
     questionSources: [],          // [] = all; ['ai_generated'] or ['past_paper'] to restrict
     count: 20,
-    mode: 'mixed',
+    selectedModes: [],       // [] = all modes (flashcard + mcq + typed)
     availableCount: null,
     loadingSetup: true,
     startingQuiz: false,
@@ -64,6 +64,14 @@
             const dueCount = parseInt(window._routeParams?.[1]);
             if (dueCount > 0) this.count = dueCount;
             await this.startQuiz();
+        }
+    },
+
+    toggleMode(id) {
+        if (this.selectedModes.includes(id)) {
+            this.selectedModes = this.selectedModes.filter(m => m !== id);
+        } else {
+            this.selectedModes = [...this.selectedModes, id];
         }
     },
 
@@ -130,15 +138,14 @@
     },
 
     get currentFormat() {
-        if (this.mode !== 'mixed') return this.mode;
+        const allModes = ['flashcard', 'mcq', 'typed'];
+        const pool = this.selectedModes.length > 0 ? this.selectedModes : allModes;
         const q = this.currentQuestion;
-        if (!q) return 'flashcard';
-        // Cycle through formats, prefer MCQ if options exist
-        if (q.mcq_options && q.mcq_options.length >= 4) {
-            const formats = ['flashcard', 'mcq', 'typed'];
-            return formats[this.currentIndex % 3];
-        }
-        return ['flashcard', 'typed'][this.currentIndex % 2];
+        if (!q) return pool[0];
+        // Filter out MCQ if this question doesn't have enough options
+        const available = pool.filter(m => m !== 'mcq' || (q.mcq_options && q.mcq_options.length >= 4));
+        if (!available.length) return 'flashcard';
+        return available[this.currentIndex % available.length];
     },
 
     get progressPct() {
@@ -165,7 +172,7 @@
             this.sessionId       = data.session_id;
             this.questions       = data.questions;
             this.currentIndex    = data.current_index ?? 0;
-            this.mode            = data.quiz_mode || 'mixed';
+            this.selectedModes   = data.quiz_modes || [];
             this.questionSources = data.question_sources || [];
             this.phase           = 'quiz';
             this.resetCard();
@@ -180,6 +187,19 @@
             await API.del('/quiz/' + id + '/progress');
         } catch (e) { /* ignore */ }
         this.savedQuizzes = this.savedQuizzes.filter(s => s.id !== id);
+    },
+
+    // Human-readable mode label for a quiz session
+    sessionModeLabel(s) {
+        const names = {flashcard: 'Flashcard', mcq: 'Multiple Choice', typed: 'Type Answer'};
+        if (s.quiz_modes_json) {
+            try {
+                const modes = JSON.parse(s.quiz_modes_json);
+                if (modes && modes.length > 0) return modes.map(m => names[m] || m).join(', ');
+            } catch (_) {}
+        }
+        // Fallback to legacy quiz_mode
+        return {mixed: 'Mixed', flashcard: 'Flashcard', mcq: 'Multiple Choice', typed: 'Type Answer'}[s.quiz_mode] || s.quiz_mode;
     },
 
     // Build a human-readable scope label for a quiz session (multi or legacy single)
@@ -219,7 +239,7 @@
                 subcategory_ids: this.selectedSubcategoryIds.length > 0 ? this.selectedSubcategoryIds : null,
                 question_sources: this.questionSources.length === 1 ? this.questionSources : null,
                 count: this.count,
-                mode: this.mode,
+                modes: this.selectedModes.length > 0 ? this.selectedModes : null,
             });
             if (!res.session_id) {
                 $store.app.showToast(res.message || 'No cards due for review', 'info');
@@ -502,11 +522,20 @@
                 </div>
 
                 <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-2">Mode</label>
-                    <div class="grid grid-cols-2 gap-2">
-                        <template x-for="m in [{id:'mixed',label:'Mixed'},{id:'flashcard',label:'Flashcard'},{id:'mcq',label:'Multiple Choice'},{id:'typed',label:'Type Answer'}]" :key="m.id">
-                            <button @click="mode = m.id"
-                                    :class="mode === m.id ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
+                    <div class="flex justify-between items-baseline mb-2">
+                        <label class="text-sm font-medium text-gray-700">Mode
+                            <span x-show="selectedModes.length > 0"
+                                  class="ml-1 text-indigo-600 font-semibold"
+                                  x-text="'(' + selectedModes.length + ' selected)'"></span>
+                        </label>
+                        <span class="text-xs text-gray-400">Leave unselected for all</span>
+                    </div>
+                    <div class="grid grid-cols-3 gap-2">
+                        <template x-for="m in [{id:'flashcard',label:'Flashcard'},{id:'mcq',label:'Multiple Choice'},{id:'typed',label:'Type Answer'}]" :key="m.id">
+                            <button @click="toggleMode(m.id)"
+                                    :class="selectedModes.includes(m.id)
+                                        ? 'bg-indigo-600 text-white ring-2 ring-indigo-300'
+                                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
                                     class="px-3 py-2 rounded-lg text-sm font-medium transition"
                                     x-text="m.label">
                             </button>
@@ -558,7 +587,7 @@
                         <!-- Mode + Source badges -->
                         <div class="flex flex-wrap gap-1.5 mb-3">
                             <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-600"
-                                  x-text="{mixed:'Mixed',flashcard:'Flashcard',mcq:'Multiple Choice',typed:'Type Answer'}[sq.quiz_mode] || sq.quiz_mode">
+                                  x-text="sessionModeLabel(sq)">
                             </span>
                             <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500"
                                   x-text="sq.questionSources?.length === 1
