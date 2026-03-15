@@ -23,6 +23,14 @@
         return total > 0 ? Math.round(s.correct_count / total * 100) : 0;
     },
 
+    answeredCount(s) {
+        return s.correct_count + s.incorrect_count + (s.skipped_count || 0);
+    },
+
+    isPartial(s) {
+        return this.answeredCount(s) < s.total_questions;
+    },
+
     sessionScopeLabel(s) {
         if (s.category_ids_json) {
             try {
@@ -124,17 +132,37 @@
                         </p>
                     </div>
                     <div class="flex items-center gap-3">
-                        <span class="text-sm">
-                            <span class="text-green-600 font-medium" x-text="s.correct_count"></span>/<span class="text-gray-500" x-text="s.total_questions"></span>
+                        <!-- Incomplete badge -->
+                        <span x-show="isPartial(s)"
+                              class="text-xs font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 whitespace-nowrap">
+                            Incomplete
                         </span>
-                        <div class="w-16 bg-gray-200 rounded-full h-2">
-                            <div class="h-2 rounded-full transition-all"
-                                 :class="sessionAccuracy(s) >= 70 ? 'bg-green-500' : 'bg-yellow-500'"
-                                 :style="'width: ' + sessionAccuracy(s) + '%'"></div>
-                        </div>
-                        <span class="text-sm font-medium w-10 text-right"
-                              :class="sessionAccuracy(s) >= 70 ? 'text-green-600' : 'text-yellow-600'"
-                              x-text="sessionAccuracy(s) + '%'"></span>
+                        <!-- Score: answered/total for partial, correct/total for complete -->
+                        <span class="text-sm whitespace-nowrap">
+                            <template x-if="isPartial(s)">
+                                <span>
+                                    <span class="text-amber-600 font-medium" x-text="answeredCount(s)"></span><span class="text-gray-400">/<span x-text="s.total_questions"></span></span>
+                                </span>
+                            </template>
+                            <template x-if="!isPartial(s)">
+                                <span>
+                                    <span class="text-green-600 font-medium" x-text="s.correct_count"></span><span class="text-gray-400">/<span x-text="s.total_questions"></span></span>
+                                </span>
+                            </template>
+                        </span>
+                        <!-- Accuracy bar + % (only shown when at least one question answered) -->
+                        <template x-if="answeredCount(s) > 0">
+                            <div class="flex items-center gap-2">
+                                <div class="w-16 bg-gray-200 rounded-full h-2">
+                                    <div class="h-2 rounded-full transition-all"
+                                         :class="isPartial(s) ? 'bg-amber-400' : (sessionAccuracy(s) >= 70 ? 'bg-green-500' : 'bg-yellow-500')"
+                                         :style="'width: ' + sessionAccuracy(s) + '%'"></div>
+                                </div>
+                                <span class="text-sm font-medium w-10 text-right"
+                                      :class="isPartial(s) ? 'text-amber-600' : (sessionAccuracy(s) >= 70 ? 'text-green-600' : 'text-yellow-600')"
+                                      x-text="sessionAccuracy(s) + '%'"></span>
+                            </div>
+                        </template>
                         <svg class="w-4 h-4 text-gray-300 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
                         </svg>
