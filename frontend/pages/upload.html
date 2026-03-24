@@ -205,8 +205,10 @@
 
         if (this.uploadType === 'pdf') {
             formData.append('file', this.file);
-            formData.append('page_start', this.pageStart);
-            formData.append('page_end', this.pageEnd);
+            if (!this.isPastPaper) {
+                formData.append('page_start', this.pageStart);
+                formData.append('page_end', this.pageEnd);
+            }
             if (!this.isPastPaper) {
                 formData.append('blend_past_papers', this.blendPastPapers ? '1' : '0');
             }
@@ -559,8 +561,8 @@
                 </div>
             </template>
 
-            <!-- Page Range (PDF only) -->
-            <template x-if="uploadType === 'pdf'">
+            <!-- Page Range (PDF only, not past paper) -->
+            <template x-if="uploadType === 'pdf' && !isPastPaper">
                 <div class="grid grid-cols-2 gap-4">
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Start Page</label>

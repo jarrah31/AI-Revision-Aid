@@ -651,7 +651,7 @@ async def upload_pdf(
     images: List[UploadFile] = File(default=[]),
     subject_id: int = Form(...),
     page_start: int = Form(1),
-    page_end: int = Form(1),
+    page_end: int | None = Form(None),
     is_shared: int = Form(0),
     is_handwritten: int = Form(0),
     batch_type: str = Form("knowledge_organiser"),
@@ -715,7 +715,8 @@ async def upload_pdf(
     if source_type != "images":
         is_handwritten = 0
 
-    # Create batch record first to get ID
+    # Create batch record first to get ID (page_end resolved after PDF is saved for PDFs)
+    _page_end_placeholder = page_end if page_end is not None else 1
     cursor = db.execute(
         """INSERT INTO upload_batches
            (user_id, subject_id, category_id, subcategory_id, filename, pdf_path,
@@ -724,7 +725,7 @@ async def upload_pdf(
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)""",
         (
             user["id"], subject_id, category_id, subcategory_id, filename, "",
-            page_start, page_end, page_end - page_start + 1, is_shared,
+            page_start, _page_end_placeholder, _page_end_placeholder - page_start + 1, is_shared,
             batch_type, source_type, is_handwritten,
             exam_board if batch_type == "past_paper" else None,
             exam_year if batch_type == "past_paper" else None,
@@ -760,6 +761,13 @@ async def upload_pdf(
 
         # Validate page range
         total_pages = get_pdf_page_count(str(qp_pdf_path))
+        if page_end is None:
+            page_end = total_pages
+            db.execute(
+                "UPDATE upload_batches SET page_end = ?, total_pages = ? WHERE id = ?",
+                (page_end, total_pages, batch_id),
+            )
+            db.commit()
         if page_start < 1 or page_end > total_pages or page_start > page_end:
             db.execute("DELETE FROM upload_batches WHERE id = ?", (batch_id,))
             db.commit()
