@@ -1247,8 +1247,8 @@ def confirm_detection(
         raise HTTPException(status_code=404, detail="Detection session not found")
 
     subject = db.execute(
-        "SELECT name FROM subjects WHERE id = ? AND user_id = ?",
-        (req.subject_id, user["id"]),
+        "SELECT name FROM subjects WHERE id = ?",
+        (req.subject_id,),
     ).fetchone()
     if not subject:
         raise HTTPException(status_code=404, detail="Subject not found")

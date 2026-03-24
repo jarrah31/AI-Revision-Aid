@@ -390,8 +390,8 @@
         </div>
     </div>
 
-    <!-- Two-column grid: upload form (left) + pending OCR reviews (right) -->
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+    <!-- Two-column grid: upload form (left) + pending OCR reviews (right, only when present) -->
+    <div :class="pendingOcr.length > 0 ? 'grid grid-cols-1 lg:grid-cols-2 gap-6 items-start' : 'block'">
 
     <!-- Left column: upload form -->
     <div class="bg-white rounded-xl shadow-sm p-6">
