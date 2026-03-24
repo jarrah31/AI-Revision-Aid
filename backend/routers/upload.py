@@ -2,8 +2,9 @@ import re
 import sqlite3
 import json
 import traceback
+import uuid
 from pathlib import Path
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks, Query
 from pydantic import BaseModel
 from typing import Optional, List
 
@@ -20,6 +21,7 @@ from backend.services.pdf_processor import (
 from backend.services.claude_service import (
     extract_qa_from_page_with_fallback,
     extract_qa_from_past_paper,
+    detect_paper_type,
     match_ko_to_past_papers,
     extract_sections_from_handwritten,
     extract_qa_from_text,
@@ -1015,6 +1017,340 @@ def save_ocr_draft(
         )
     db.commit()
     return {"batch_id": batch_id}
+
+
+# ── Multi-paper detection endpoints ───────────────────────────────────────────
+
+class ConfirmPair(BaseModel):
+    qp_id: int
+    ms_id: int | None = None
+    # Optional user-corrected metadata (overrides detected values)
+    exam_board: str | None = None
+    exam_year: int | None = None
+    paper_number: str | None = None
+    tier: str | None = None
+
+class ConfirmDetectionRequest(BaseModel):
+    session_id: str
+    subject_id: int
+    category_id: int | None = None
+    subcategory_id: int | None = None
+    pairs: list[ConfirmPair]
+
+
+def _compute_matches(files: list[dict]) -> list[dict]:
+    """Group detected files into QP+MS pairs by shared metadata."""
+    from collections import defaultdict
+    detected = [f for f in files if f["status"] == "detected"]
+    groups: dict[tuple, list[dict]] = defaultdict(list)
+    unmatched = []
+
+    for f in detected:
+        key = (
+            (f["exam_board"] or "").lower(),
+            f["exam_year"],
+            (f["paper_number"] or "").lower(),
+            (f["tier"] or "").lower(),
+        )
+        # Only group when at least board+year are known
+        if f["exam_board"] and f["exam_year"]:
+            groups[key].append(f)
+        else:
+            unmatched.append(f)
+
+    matches = []
+    group_num = 1
+    for key, group_files in groups.items():
+        qps = [f for f in group_files if f["paper_type"] in ("question_paper", "combined")]
+        mss = [f for f in group_files if f["paper_type"] == "mark_scheme"]
+        other = [f for f in group_files if f["paper_type"] not in ("question_paper", "combined", "mark_scheme")]
+
+        for qp in qps:
+            ms = mss.pop(0) if mss else None
+            matches.append({
+                "match_group": group_num,
+                "qp_id": qp["id"],
+                "ms_id": ms["id"] if ms else None,
+                "exam_board": qp["exam_board"],
+                "exam_year": qp["exam_year"],
+                "paper_number": qp["paper_number"],
+                "tier": qp["tier"],
+            })
+            group_num += 1
+
+        # Remaining unmatched MSs and unknowns
+        for f in mss + other:
+            unmatched.append(f)
+
+    for f in unmatched:
+        matches.append({
+            "match_group": None,
+            "qp_id": f["id"] if f["paper_type"] != "mark_scheme" else None,
+            "ms_id": f["id"] if f["paper_type"] == "mark_scheme" else None,
+            "exam_board": f["exam_board"],
+            "exam_year": f["exam_year"],
+            "paper_number": f["paper_number"],
+            "tier": f["tier"],
+        })
+
+    return matches
+
+
+def _detect_papers_task(session_id: str, file_ids: list[int]):
+    """Background task: detect paper type for each file's cover page."""
+    db = sqlite3.connect(str(DB_PATH))
+    db.row_factory = sqlite3.Row
+    db.execute("PRAGMA foreign_keys=ON")
+    pdf_dir = DATA_DIR / "pdfs"
+
+    try:
+        for file_id in file_ids:
+            row = db.execute(
+                "SELECT * FROM paper_detection_files WHERE id = ?", (file_id,)
+            ).fetchone()
+            if not row:
+                continue
+
+            saved_path = pdf_dir / row["saved_path"]
+            try:
+                png_bytes = render_page_to_png(str(saved_path), 0)  # page 0 = first page
+                image_b64 = png_to_base64(png_bytes)
+                result, usage = detect_paper_type(image_b64)
+
+                db.execute(
+                    """UPDATE paper_detection_files
+                       SET status = 'detected',
+                           paper_type = ?, exam_board = ?, exam_year = ?,
+                           paper_number = ?, tier = ?, subject_detected = ?
+                       WHERE id = ?""",
+                    (
+                        result.get("paper_type"),
+                        result.get("exam_board"),
+                        result.get("exam_year"),
+                        result.get("paper_number"),
+                        result.get("tier"),
+                        result.get("subject"),
+                        file_id,
+                    ),
+                )
+            except Exception as e:
+                db.execute(
+                    "UPDATE paper_detection_files SET status = 'failed', error_message = ? WHERE id = ?",
+                    (str(e), file_id),
+                )
+            db.commit()
+
+        db.execute(
+            "UPDATE paper_detection_sessions SET status = 'completed' WHERE id = ?",
+            (session_id,),
+        )
+        db.commit()
+    except Exception:
+        db.execute(
+            "UPDATE paper_detection_sessions SET status = 'failed' WHERE id = ?",
+            (session_id,),
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+@router.post("/detect-papers")
+async def detect_papers(
+    background_tasks: BackgroundTasks,
+    files: List[UploadFile] = File(...),
+    subject_id: int = Form(...),
+    user: dict = Depends(get_current_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Phase 1: accept multiple PDFs, save them, kick off cover-page detection."""
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided")
+
+    session_id = str(uuid.uuid4())
+    pdf_dir = DATA_DIR / "pdfs"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+
+    db.execute(
+        "INSERT INTO paper_detection_sessions (id, user_id, subject_id) VALUES (?, ?, ?)",
+        (session_id, user["id"], subject_id),
+    )
+    db.commit()
+
+    file_ids: list[int] = []
+    for i, upload in enumerate(files):
+        if not upload.filename or not upload.filename.lower().endswith(".pdf"):
+            continue
+        saved_name = f"detect_{session_id}_{i}.pdf"
+        saved_path = pdf_dir / saved_name
+        content = await upload.read()
+        saved_path.write_bytes(content)
+
+        cursor = db.execute(
+            """INSERT INTO paper_detection_files (session_id, filename, saved_path)
+               VALUES (?, ?, ?)""",
+            (session_id, upload.filename, saved_name),
+        )
+        db.commit()
+        file_ids.append(cursor.lastrowid)
+
+    if not file_ids:
+        raise HTTPException(status_code=400, detail="No valid PDF files found")
+
+    background_tasks.add_task(_detect_papers_task, session_id, file_ids)
+    return {"session_id": session_id}
+
+
+@router.get("/detect-status/{session_id}")
+def get_detect_status(
+    session_id: str,
+    user: dict = Depends(get_current_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Poll detection progress. Returns per-file results and auto-matched pairs."""
+    session = db.execute(
+        "SELECT * FROM paper_detection_sessions WHERE id = ? AND user_id = ?",
+        (session_id, user["id"]),
+    ).fetchone()
+    if not session:
+        raise HTTPException(status_code=404, detail="Detection session not found")
+
+    files = db.execute(
+        "SELECT * FROM paper_detection_files WHERE session_id = ? ORDER BY id",
+        (session_id,),
+    ).fetchall()
+
+    file_list = [dict(f) for f in files]
+    all_done = session["status"] == "completed"
+    matches = _compute_matches(file_list) if all_done else []
+
+    return {
+        "status": session["status"],
+        "files": file_list,
+        "matches": matches,
+    }
+
+
+@router.post("/confirm-detection")
+def confirm_detection(
+    req: ConfirmDetectionRequest,
+    background_tasks: BackgroundTasks,
+    user: dict = Depends(get_current_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Phase 2: for each confirmed QP+MS pair, create a batch and start processing."""
+    session = db.execute(
+        "SELECT * FROM paper_detection_sessions WHERE id = ? AND user_id = ?",
+        (req.session_id, user["id"]),
+    ).fetchone()
+    if not session:
+        raise HTTPException(status_code=404, detail="Detection session not found")
+
+    subject = db.execute(
+        "SELECT name FROM subjects WHERE id = ? AND user_id = ?",
+        (req.subject_id, user["id"]),
+    ).fetchone()
+    if not subject:
+        raise HTTPException(status_code=404, detail="Subject not found")
+
+    pdf_dir = DATA_DIR / "pdfs"
+    batch_ids: list[int] = []
+
+    for pair in req.pairs:
+        qp_file = db.execute(
+            "SELECT * FROM paper_detection_files WHERE id = ? AND session_id = ?",
+            (pair.qp_id, req.session_id),
+        ).fetchone()
+        if not qp_file:
+            continue
+
+        # Get total pages of QP
+        src_path = pdf_dir / qp_file["saved_path"]
+        try:
+            total_pages = get_pdf_page_count(str(src_path))
+        except Exception:
+            total_pages = 0
+
+        # Create batch record
+        cursor = db.execute(
+            """INSERT INTO upload_batches
+               (user_id, subject_id, category_id, subcategory_id, filename, pdf_path,
+                page_start, page_end, total_pages, is_shared, status, batch_type,
+                source_type, exam_board, exam_year, paper_number, tier)
+               VALUES (?, ?, ?, ?, ?, '', 1, ?, ?, 0, 'pending', 'past_paper', 'pdf',
+                       ?, ?, ?, ?)""",
+            (
+                user["id"], req.subject_id, req.category_id, req.subcategory_id,
+                qp_file["filename"],
+                total_pages, total_pages,
+                qp_file["exam_board"], qp_file["exam_year"],
+                qp_file["paper_number"], qp_file["tier"],
+            ),
+        )
+        db.commit()
+        batch_id = cursor.lastrowid
+
+        # Rename detect file → batch file
+        dest_path = pdf_dir / f"batch_{batch_id}.pdf"
+        src_path.rename(dest_path)
+        db.execute(
+            "UPDATE upload_batches SET pdf_path = ? WHERE id = ?",
+            (f"batch_{batch_id}.pdf", batch_id),
+        )
+        db.commit()
+
+        # Handle MS file if paired
+        ms_pdf_path: str | None = None
+        if pair.ms_id:
+            ms_file = db.execute(
+                "SELECT * FROM paper_detection_files WHERE id = ? AND session_id = ?",
+                (pair.ms_id, req.session_id),
+            ).fetchone()
+            if ms_file:
+                ms_src = pdf_dir / ms_file["saved_path"]
+                ms_dest = pdf_dir / f"batch_{batch_id}_ms.pdf"
+                if ms_src.exists():
+                    ms_src.rename(ms_dest)
+                    ms_pdf_path = str(ms_dest)
+
+        background_tasks.add_task(
+            process_batch,
+            batch_id=batch_id,
+            pdf_path=str(dest_path),
+            subject_name=subject["name"],
+            subject_id=req.subject_id,
+            user_id=user["id"],
+            page_start=1,
+            page_end=total_pages,
+            batch_type="past_paper",
+            ms_pdf_path=ms_pdf_path,
+            category_id=req.category_id,
+            subcategory_id=req.subcategory_id,
+        )
+        batch_ids.append(batch_id)
+
+    return {"batch_ids": batch_ids}
+
+
+@router.get("/multi-status")
+def get_multi_status(
+    ids: List[int] = Query(...),
+    user: dict = Depends(get_current_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Return status for multiple batch IDs at once."""
+    if not ids:
+        return []
+    placeholders = ",".join("?" * len(ids))
+    batches = db.execute(
+        f"""SELECT b.id, b.status, b.filename, b.total_pages, b.processed_pages,
+                   b.error_message, b.exam_board, b.exam_year, b.paper_number, b.tier,
+                   (SELECT COUNT(*) FROM questions q WHERE q.batch_id = b.id) as question_count
+            FROM upload_batches b
+            WHERE b.id IN ({placeholders}) AND b.user_id = ?""",
+        (*ids, user["id"]),
+    ).fetchall()
+    return [dict(b) for b in batches]
 
 
 @router.get("/history")

@@ -245,6 +245,31 @@ def init_db():
             FOREIGN KEY (batch_id) REFERENCES upload_batches(id) ON DELETE CASCADE
         );
         CREATE INDEX IF NOT EXISTS idx_ocr_sections_batch ON ocr_sections(batch_id);
+
+        CREATE TABLE IF NOT EXISTS paper_detection_sessions (
+            id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL,
+            status TEXT NOT NULL DEFAULT 'detecting',
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS paper_detection_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL REFERENCES paper_detection_sessions(id) ON DELETE CASCADE,
+            filename TEXT NOT NULL,
+            saved_path TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            paper_type TEXT DEFAULT NULL,
+            exam_board TEXT DEFAULT NULL,
+            exam_year INTEGER DEFAULT NULL,
+            paper_number TEXT DEFAULT NULL,
+            tier TEXT DEFAULT NULL,
+            subject_detected TEXT DEFAULT NULL,
+            error_message TEXT DEFAULT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_pdf_session ON paper_detection_files(session_id);
     """)
 
     db.commit()

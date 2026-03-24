@@ -18,6 +18,7 @@ const Router = {
         'upload-history': '/static/pages/upload-history.html',
         'ocr-review': '/static/pages/ocr_review.html',
         'quiz-review': '/static/pages/quiz_review.html',
+        'multi-processing': '/static/pages/multi-processing.html',
     },
 
     publicRoutes: ['login', 'signup'],

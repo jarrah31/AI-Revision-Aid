@@ -1,0 +1,154 @@
+<div x-data="{
+    batchIds: [],
+    batches: [],
+    polling: null,
+    allDone: false,
+
+    async init() {
+        const param = window._routeParams?.[0];
+        if (!param) {
+            window.location.hash = '#upload';
+            return;
+        }
+        this.batchIds = param.split(',').map(Number).filter(Boolean);
+        if (!this.batchIds.length) {
+            window.location.hash = '#upload';
+            return;
+        }
+        await this.poll();
+        this.polling = setInterval(() => this.poll(), 2000);
+    },
+
+    async poll() {
+        try {
+            this.batches = await API.get('/upload/multi-status?ids=' + this.batchIds.join(','));
+            const done = this.batches.every(b => b.status === 'completed' || b.status === 'failed');
+            if (done) {
+                clearInterval(this.polling);
+                this.allDone = true;
+                const allOk = this.batches.every(b => b.status === 'completed');
+                if (allOk) {
+                    Alpine.store('app').showToast('All papers processed!', 'success');
+                }
+            }
+        } catch (e) {
+            clearInterval(this.polling);
+            Alpine.store('app').showToast('Failed to check status', 'error');
+        }
+    },
+
+    progressPct(b) {
+        if (!b || !b.total_pages) return 0;
+        return Math.round((b.processed_pages / b.total_pages) * 100);
+    },
+
+    get totalQuestions() {
+        return this.batches.reduce((sum, b) => sum + (b.question_count || 0), 0);
+    },
+
+    get completedCount() {
+        return this.batches.filter(b => b.status === 'completed').length;
+    },
+
+    batchLabel(b) {
+        const parts = [];
+        if (b.exam_board) parts.push(b.exam_board);
+        if (b.exam_year) parts.push(b.exam_year);
+        if (b.paper_number) parts.push(b.paper_number);
+        if (b.tier) parts.push(b.tier);
+        return parts.length ? parts.join(' · ') : b.filename;
+    },
+
+    destroy() {
+        if (this.polling) clearInterval(this.polling);
+    }
+}">
+    <h1 class="text-2xl font-bold text-gray-800 mb-2">Processing Past Papers</h1>
+    <p class="text-sm text-gray-500 mb-6"
+       x-text="completedCount + ' of ' + batches.length + ' complete'"></p>
+
+    <!-- All done banner -->
+    <div x-show="allDone && batches.every(b => b.status === 'completed')"
+         class="bg-green-50 border border-green-200 rounded-xl p-4 mb-6 flex items-center justify-between gap-4">
+        <div class="flex items-center gap-2 text-green-700">
+            <svg class="h-5 w-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+            </svg>
+            <span class="font-medium">All papers processed —
+                <span x-text="totalQuestions"></span> questions extracted
+            </span>
+        </div>
+        <a href="#subjects"
+           class="shrink-0 bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700 transition">
+            Go to Subjects →
+        </a>
+    </div>
+
+    <!-- Batch cards -->
+    <div class="space-y-4 max-w-2xl" x-show="batches.length > 0">
+        <template x-for="b in batches" :key="b.id">
+            <div class="bg-white rounded-xl shadow-sm p-5">
+                <!-- Header -->
+                <div class="flex items-start justify-between gap-3 mb-1">
+                    <div class="min-w-0">
+                        <p class="font-semibold text-gray-800 text-sm" x-text="batchLabel(b)"></p>
+                        <p class="text-xs text-gray-400 truncate mt-0.5" :title="b.filename" x-text="b.filename"></p>
+                    </div>
+                    <!-- Status badge -->
+                    <span x-show="b.status === 'completed'"
+                          class="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
+                        Done
+                    </span>
+                    <span x-show="b.status === 'failed'"
+                          class="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-600">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                        Failed
+                    </span>
+                    <span x-show="b.status === 'processing' || b.status === 'pending'"
+                          class="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-600">
+                        <svg class="animate-spin w-3 h-3" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                        Processing
+                    </span>
+                </div>
+
+                <!-- Progress bar -->
+                <div x-show="b.status === 'processing' || b.status === 'completed'" class="mt-3">
+                    <div class="flex justify-between text-xs text-gray-400 mb-1">
+                        <span>Pages</span>
+                        <span x-text="(b.processed_pages || 0) + ' / ' + (b.total_pages || 0)"></span>
+                    </div>
+                    <div class="w-full bg-gray-100 rounded-full h-2">
+                        <div class="bg-indigo-500 h-2 rounded-full transition-all duration-500"
+                             :style="'width: ' + progressPct(b) + '%'"></div>
+                    </div>
+                </div>
+
+                <!-- Completed info -->
+                <div x-show="b.status === 'completed'" class="mt-3 flex items-center justify-between">
+                    <p class="text-sm text-gray-600">
+                        <span x-text="b.question_count || 0"></span> questions extracted
+                    </p>
+                    <a :href="'#review/' + b.id"
+                       class="text-sm text-indigo-600 hover:underline font-medium">
+                        Review →
+                    </a>
+                </div>
+
+                <!-- Failed info -->
+                <div x-show="b.status === 'failed'" class="mt-3">
+                    <p x-show="b.error_message" class="text-sm text-red-500" x-text="b.error_message"></p>
+                </div>
+            </div>
+        </template>
+    </div>
+
+    <!-- Loading state -->
+    <div x-show="batches.length === 0" class="text-center py-12 text-gray-400">
+        <svg class="animate-spin w-8 h-8 mx-auto mb-2 text-indigo-400" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+        </svg>
+        Loading…
+    </div>
+</div>

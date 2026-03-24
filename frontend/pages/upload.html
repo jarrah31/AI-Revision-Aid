@@ -37,6 +37,25 @@
 
     get isPastPaper() { return this.batchType === 'past_paper'; },
 
+    // --- Past Paper Multi-Phase Detection ---
+    ppPhase: 'select',
+    ppFiles: [],
+    ppSessionId: null,
+    ppDetections: [],
+    ppDetectStatus: 'detecting',
+    ppMatches: [],
+    ppPollInterval: null,
+
+    get ppMatchedPairs() {
+        return this.ppMatches.filter(m => m.match_group !== null);
+    },
+    get ppUnmatchedFiles() {
+        return this.ppMatches.filter(m => m.match_group === null);
+    },
+    get ppProcessablePairs() {
+        return this.ppMatches.filter(m => m.qp_id !== null);
+    },
+
     async init() {
         try {
             this.subjects = await API.get('/subjects');
@@ -59,6 +78,9 @@
             this.subcategoryId = null;
             this.showNewSubcategory = false;
             await this.loadSubcategories();
+        });
+        this.$watch('batchType', val => {
+            if (val === 'past_paper') this.resetPastPaper();
         });
     },
 
@@ -173,6 +195,112 @@
         }
     },
 
+    // --- Past Paper methods ---
+
+    onPpFilesChange(event) {
+        this.ppFiles = Array.from(event.target.files);
+    },
+
+    resetPastPaper() {
+        this.stopDetectionPoll();
+        this.ppPhase = 'select';
+        this.ppFiles = [];
+        this.ppSessionId = null;
+        this.ppDetections = [];
+        this.ppMatches = [];
+        this.ppDetectStatus = 'detecting';
+        this.error = '';
+    },
+
+    ppFileById(id) {
+        return this.ppDetections.find(f => f.id === id) || null;
+    },
+
+    async startDetection() {
+        if (!this.ppFiles.length || !this.subjectId) {
+            this.error = 'Please select PDF files and a subject';
+            return;
+        }
+        this.error = '';
+        this.ppPhase = 'detecting';
+        this.ppDetections = this.ppFiles.map(f => ({ filename: f.name, status: 'pending' }));
+
+        const formData = new FormData();
+        formData.append('subject_id', this.subjectId);
+        for (const f of this.ppFiles) formData.append('files', f);
+
+        try {
+            const res = await API.upload('/upload/detect-papers', formData);
+            this.ppSessionId = res.session_id;
+            this.startDetectionPoll();
+        } catch (e) {
+            this.error = e.message;
+            this.ppPhase = 'select';
+        }
+    },
+
+    startDetectionPoll() {
+        this.ppPollInterval = setInterval(async () => {
+            try {
+                const res = await API.get('/upload/detect-status/' + this.ppSessionId);
+                this.ppDetections = res.files;
+                this.ppMatches = res.matches || [];
+                this.ppDetectStatus = res.status;
+                if (res.status === 'completed') {
+                    this.stopDetectionPoll();
+                    this.ppPhase = 'confirm';
+                } else if (res.status === 'failed') {
+                    this.stopDetectionPoll();
+                    this.error = 'Detection failed — please try again';
+                    this.ppPhase = 'select';
+                }
+            } catch (e) {
+                // silently retry
+            }
+        }, 1500);
+    },
+
+    stopDetectionPoll() {
+        if (this.ppPollInterval) {
+            clearInterval(this.ppPollInterval);
+            this.ppPollInterval = null;
+        }
+    },
+
+    async processPapers() {
+        const pairs = this.ppProcessablePairs.map(m => ({
+            qp_id: m.qp_id,
+            ms_id: m.ms_id || null,
+            exam_board: m.exam_board || null,
+            exam_year: m.exam_year || null,
+            paper_number: m.paper_number || null,
+            tier: m.tier || null,
+        }));
+
+        if (!pairs.length) {
+            this.error = 'No processable papers found';
+            return;
+        }
+
+        this.ppPhase = 'submitting';
+        this.error = '';
+
+        try {
+            const res = await API.post('/upload/confirm-detection', {
+                session_id: this.ppSessionId,
+                subject_id: this.subjectId,
+                category_id: this.categoryId || null,
+                pairs: pairs,
+            });
+            window.location.hash = '#multi-processing/' + res.batch_ids.join(',');
+        } catch (e) {
+            this.error = e.message;
+            this.ppPhase = 'confirm';
+        }
+    },
+
+    // --- Knowledge Organiser upload ---
+
     async upload() {
         if (this.uploadType === 'pdf') {
             if (!this.file || !this.subjectId) {
@@ -197,22 +325,15 @@
 
         if (this.uploadType === 'pdf') {
             formData.append('file', this.file);
-            if (!this.isPastPaper) {
-                formData.append('page_start', this.pageStart);
-                formData.append('page_end', this.pageEnd);
-                formData.append('blend_past_papers', this.blendPastPapers ? '1' : '0');
-            }
-            if (this.isPastPaper && this.msFile) {
-                formData.append('mark_scheme_file', this.msFile);
-            }
+            formData.append('page_start', this.pageStart);
+            formData.append('page_end', this.pageEnd);
+            formData.append('blend_past_papers', this.blendPastPapers ? '1' : '0');
         } else {
             for (const img of this.imageFiles) {
                 formData.append('images', img);
             }
             formData.append('is_handwritten', this.isHandwritten ? '1' : '0');
-            if (!this.isPastPaper) {
-                formData.append('blend_past_papers', this.blendPastPapers ? '1' : '0');
-            }
+            formData.append('blend_past_papers', this.blendPastPapers ? '1' : '0');
         }
 
         try {
@@ -290,179 +411,159 @@
             </button>
         </div>
 
-        <!-- File type toggle -->
-        <div class="flex rounded-lg border border-gray-200 p-1 mb-5 bg-gray-50">
-            <button type="button" @click="switchUploadType('pdf')"
-                    :class="uploadType === 'pdf' ? 'bg-white shadow-sm text-indigo-600 font-semibold' : 'text-gray-500 hover:text-gray-700'"
-                    class="flex-1 py-1.5 px-3 rounded-md text-sm transition-all flex items-center justify-center gap-1.5">
-                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
-                PDF
-            </button>
-            <button type="button" @click="switchUploadType('images')"
-                    :class="uploadType === 'images' ? 'bg-white shadow-sm text-indigo-600 font-semibold' : 'text-gray-500 hover:text-gray-700'"
-                    class="flex-1 py-1.5 px-3 rounded-md text-sm transition-all flex items-center justify-center gap-1.5">
-                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-                Images
-            </button>
-        </div>
+        <!-- Knowledge Organiser form -->
+        <div x-show="!isPastPaper">
+            <!-- File type toggle -->
+            <div class="flex rounded-lg border border-gray-200 p-1 mb-5 bg-gray-50">
+                <button type="button" @click="switchUploadType('pdf')"
+                        :class="uploadType === 'pdf' ? 'bg-white shadow-sm text-indigo-600 font-semibold' : 'text-gray-500 hover:text-gray-700'"
+                        class="flex-1 py-1.5 px-3 rounded-md text-sm transition-all flex items-center justify-center gap-1.5">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
+                    PDF
+                </button>
+                <button type="button" @click="switchUploadType('images')"
+                        :class="uploadType === 'images' ? 'bg-white shadow-sm text-indigo-600 font-semibold' : 'text-gray-500 hover:text-gray-700'"
+                        class="flex-1 py-1.5 px-3 rounded-md text-sm transition-all flex items-center justify-center gap-1.5">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                    Images
+                </button>
+            </div>
 
-        <form @submit.prevent="upload()" class="space-y-5">
-            <!-- PDF file input -->
-            <template x-if="uploadType === 'pdf'">
-                <div class="space-y-3">
+            <form @submit.prevent="upload()" class="space-y-5">
+                <!-- PDF file input -->
+                <template x-if="uploadType === 'pdf'">
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">
-                            <span x-text="isPastPaper ? 'Question Paper PDF' : 'PDF File'"></span>
-                        </label>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">PDF File</label>
                         <input type="file" accept=".pdf" @change="onFileChange"
                                class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
                     </div>
+                </template>
 
-                    <!-- Optional mark scheme PDF (past paper mode only) -->
-                    <template x-if="isPastPaper">
-                        <div class="pl-4 border-l-2 border-blue-200">
-                            <label class="block text-sm font-medium text-gray-700 mb-1">
-                                Mark Scheme PDF
-                                <span class="text-gray-400 font-normal">(optional)</span>
+                <!-- Image file input -->
+                <template x-if="uploadType === 'images'">
+                    <div>
+                        <!-- Handwritten Notes toggle -->
+                        <div class="flex items-start gap-3 mb-4 p-3 bg-amber-50 rounded-lg border border-amber-200">
+                            <label class="relative inline-flex items-center cursor-pointer shrink-0 mt-0.5">
+                                <input type="checkbox" x-model="isHandwritten" class="sr-only peer">
+                                <div class="w-11 h-6 bg-gray-200 peer-focus:ring-2 peer-focus:ring-amber-300 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500"></div>
                             </label>
-                            <input type="file" accept=".pdf" @change="onMsFileChange"
-                                   class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
-                            <p class="text-xs text-gray-400 mt-1">
-                                Upload the separate mark scheme PDF — answers will be automatically matched to questions.
-                                <span x-show="!msFile" class="text-gray-400">If omitted, AI-inferred answers are used.</span>
-                                <span x-show="msFile" class="text-blue-600 font-medium">✓ Mark scheme ready</span>
-                            </p>
-                        </div>
-                    </template>
-                </div>
-            </template>
-
-            <!-- Image file input -->
-            <template x-if="uploadType === 'images'">
-                <div>
-                    <!-- Handwritten Notes toggle -->
-                    <div class="flex items-start gap-3 mb-4 p-3 bg-amber-50 rounded-lg border border-amber-200">
-                        <label class="relative inline-flex items-center cursor-pointer shrink-0 mt-0.5">
-                            <input type="checkbox" x-model="isHandwritten" class="sr-only peer">
-                            <div class="w-11 h-6 bg-gray-200 peer-focus:ring-2 peer-focus:ring-amber-300 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500"></div>
-                        </label>
-                        <div>
-                            <p class="text-sm font-medium text-amber-800">✏️ Handwritten notes</p>
-                            <p class="text-xs text-amber-600 mt-0.5">Adds an OCR review step — verify the transcribed text before questions are generated</p>
-                        </div>
-                    </div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">
-                        Images
-                        <span class="text-gray-400 font-normal">(JPG, PNG, WEBP, GIF — select multiple)</span>
-                    </label>
-                    <input type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple
-                           @change="onImageFilesChange"
-                           class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-violet-50 file:text-violet-700 hover:file:bg-violet-100">
-                    <!-- Thumbnails -->
-                    <div x-show="imagePreviews.length > 0" class="mt-3 grid grid-cols-4 gap-2">
-                        <template x-for="(preview, i) in imagePreviews" :key="i">
-                            <div class="relative group">
-                                <img x-show="preview" :src="preview"
-                                     @error="markPreviewFailed(i)"
-                                     class="w-full h-16 object-cover rounded-lg border border-gray-200">
-                                <div x-show="!preview"
-                                     class="w-full h-16 flex items-center justify-center rounded-lg border border-dashed border-gray-300 bg-gray-50 text-gray-400 text-xl">🖼️</div>
-                                <button type="button" @click="removeImage(i)"
-                                        class="absolute -top-1.5 -right-1.5 w-5 h-5 bg-red-500 text-white rounded-full text-xs leading-none flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow">✕</button>
-                                <p class="text-xs text-gray-400 mt-0.5 truncate" x-text="imageFiles[i] ? imageFiles[i].name : ''"></p>
+                            <div>
+                                <p class="text-sm font-medium text-amber-800">✏️ Handwritten notes</p>
+                                <p class="text-xs text-amber-600 mt-0.5">Adds an OCR review step — verify the transcribed text before questions are generated</p>
                             </div>
-                        </template>
+                        </div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            Images
+                            <span class="text-gray-400 font-normal">(JPG, PNG, WEBP, GIF — select multiple)</span>
+                        </label>
+                        <input type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple
+                               @change="onImageFilesChange"
+                               class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-violet-50 file:text-violet-700 hover:file:bg-violet-100">
+                        <!-- Thumbnails -->
+                        <div x-show="imagePreviews.length > 0" class="mt-3 grid grid-cols-4 gap-2">
+                            <template x-for="(preview, i) in imagePreviews" :key="i">
+                                <div class="relative group">
+                                    <img x-show="preview" :src="preview"
+                                         @error="markPreviewFailed(i)"
+                                         class="w-full h-16 object-cover rounded-lg border border-gray-200">
+                                    <div x-show="!preview"
+                                         class="w-full h-16 flex items-center justify-center rounded-lg border border-dashed border-gray-300 bg-gray-50 text-gray-400 text-xl">🖼️</div>
+                                    <button type="button" @click="removeImage(i)"
+                                            class="absolute -top-1.5 -right-1.5 w-5 h-5 bg-red-500 text-white rounded-full text-xs leading-none flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow">✕</button>
+                                    <p class="text-xs text-gray-400 mt-0.5 truncate" x-text="imageFiles[i] ? imageFiles[i].name : ''"></p>
+                                </div>
+                            </template>
+                        </div>
+                        <p x-show="imagePreviews.length > 0" class="text-xs text-gray-500 mt-2"
+                           x-text="imagePreviews.length + ' image' + (imagePreviews.length === 1 ? '' : 's') + ' selected — each image is processed as one page'"></p>
                     </div>
-                    <p x-show="imagePreviews.length > 0" class="text-xs text-gray-500 mt-2"
-                       x-text="imagePreviews.length + ' image' + (imagePreviews.length === 1 ? '' : 's') + ' selected — each image is processed as one page'"></p>
-                </div>
-            </template>
+                </template>
 
-            <!-- Subject -->
-            <div>
-                <label class="block text-sm font-medium text-gray-700 mb-1">Subject</label>
-                <div x-show="!showNewSubject">
-                    <select x-model="subjectId" required
-                            class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
-                        <template x-for="s in subjects" :key="s.id">
-                            <option :value="s.id" x-text="s.name"></option>
-                        </template>
-                    </select>
-                    <button type="button" @click="showNewSubject = true"
-                            class="text-sm text-indigo-600 mt-1 hover:underline">
-                        + Create new subject
-                    </button>
+                <!-- Subject -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Subject</label>
+                    <div x-show="!showNewSubject">
+                        <select x-model="subjectId" required
+                                class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                            <template x-for="s in subjects" :key="s.id">
+                                <option :value="s.id" x-text="s.name"></option>
+                            </template>
+                        </select>
+                        <button type="button" @click="showNewSubject = true"
+                                class="text-sm text-indigo-600 mt-1 hover:underline">
+                            + Create new subject
+                        </button>
+                    </div>
+                    <div x-show="showNewSubject" class="flex gap-2">
+                        <input x-model="newSubject" type="text" placeholder="Subject name"
+                               class="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                        <button type="button" @click="createSubject()"
+                                class="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700">Add</button>
+                        <button type="button" @click="showNewSubject = false"
+                                class="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm hover:bg-gray-200">Cancel</button>
+                    </div>
                 </div>
-                <div x-show="showNewSubject" class="flex gap-2">
-                    <input x-model="newSubject" type="text" placeholder="Subject name"
-                           class="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
-                    <button type="button" @click="createSubject()"
-                            class="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700">Add</button>
-                    <button type="button" @click="showNewSubject = false"
-                            class="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm hover:bg-gray-200">Cancel</button>
-                </div>
-            </div>
 
-            <!-- Category (optional) -->
-            <div x-show="subjectId">
-                <label class="block text-sm font-medium text-gray-700 mb-1">
-                    Category
-                    <span class="text-gray-400 font-normal">(optional)</span>
-                </label>
-                <div x-show="!showNewCategory">
-                    <select x-model.number="categoryId"
-                            class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
-                        <option :value="null">— No category —</option>
-                        <template x-for="c in categories" :key="c.id">
-                            <option :value="c.id" x-text="c.name"></option>
-                        </template>
-                    </select>
-                    <button type="button" @click="showNewCategory = true"
-                            class="text-sm text-indigo-600 mt-1 hover:underline">
-                        + Create new category
-                    </button>
+                <!-- Category (optional) -->
+                <div x-show="subjectId">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">
+                        Category
+                        <span class="text-gray-400 font-normal">(optional)</span>
+                    </label>
+                    <div x-show="!showNewCategory">
+                        <select x-model.number="categoryId"
+                                class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                            <option :value="null">— No category —</option>
+                            <template x-for="c in categories" :key="c.id">
+                                <option :value="c.id" x-text="c.name"></option>
+                            </template>
+                        </select>
+                        <button type="button" @click="showNewCategory = true"
+                                class="text-sm text-indigo-600 mt-1 hover:underline">
+                            + Create new category
+                        </button>
+                    </div>
+                    <div x-show="showNewCategory" class="flex gap-2">
+                        <input x-model="newCategory" type="text" placeholder="Category name"
+                               class="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                        <button type="button" @click="createCategory()"
+                                class="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700">Add</button>
+                        <button type="button" @click="showNewCategory = false; newCategory = ''"
+                                class="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm hover:bg-gray-200">Cancel</button>
+                    </div>
                 </div>
-                <div x-show="showNewCategory" class="flex gap-2">
-                    <input x-model="newCategory" type="text" placeholder="Category name"
-                           class="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
-                    <button type="button" @click="createCategory()"
-                            class="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700">Add</button>
-                    <button type="button" @click="showNewCategory = false; newCategory = ''"
-                            class="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm hover:bg-gray-200">Cancel</button>
-                </div>
-            </div>
 
-            <!-- Sub-Category (optional, shown when a category is selected) -->
-            <div x-show="categoryId">
-                <label class="block text-sm font-medium text-gray-700 mb-1">
-                    Sub-Category
-                    <span class="text-gray-400 font-normal">(optional)</span>
-                </label>
-                <div x-show="!showNewSubcategory">
-                    <select x-model.number="subcategoryId"
-                            class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
-                        <option :value="null">— No sub-category —</option>
-                        <template x-for="sc in subcategories" :key="sc.id">
-                            <option :value="sc.id" x-text="sc.name"></option>
-                        </template>
-                    </select>
-                    <button type="button" @click="showNewSubcategory = true"
-                            class="text-sm text-indigo-600 mt-1 hover:underline">
-                        + Create new sub-category
-                    </button>
+                <!-- Sub-Category (optional, shown when a category is selected) -->
+                <div x-show="categoryId">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">
+                        Sub-Category
+                        <span class="text-gray-400 font-normal">(optional)</span>
+                    </label>
+                    <div x-show="!showNewSubcategory">
+                        <select x-model.number="subcategoryId"
+                                class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                            <option :value="null">— No sub-category —</option>
+                            <template x-for="sc in subcategories" :key="sc.id">
+                                <option :value="sc.id" x-text="sc.name"></option>
+                            </template>
+                        </select>
+                        <button type="button" @click="showNewSubcategory = true"
+                                class="text-sm text-indigo-600 mt-1 hover:underline">
+                            + Create new sub-category
+                        </button>
+                    </div>
+                    <div x-show="showNewSubcategory" class="flex gap-2">
+                        <input x-model="newSubcategory" type="text" placeholder="Sub-category name"
+                               class="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                        <button type="button" @click="createSubcategory()"
+                                class="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700">Add</button>
+                        <button type="button" @click="showNewSubcategory = false; newSubcategory = ''"
+                                class="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm hover:bg-gray-200">Cancel</button>
+                    </div>
                 </div>
-                <div x-show="showNewSubcategory" class="flex gap-2">
-                    <input x-model="newSubcategory" type="text" placeholder="Sub-category name"
-                           class="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
-                    <button type="button" @click="createSubcategory()"
-                            class="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700">Add</button>
-                    <button type="button" @click="showNewSubcategory = false; newSubcategory = ''"
-                            class="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm hover:bg-gray-200">Cancel</button>
-                </div>
-            </div>
 
-            <!-- KO blend option (only when batch type = knowledge_organiser) -->
-            <template x-if="!isPastPaper">
+                <!-- Question source -->
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-2">Question source</label>
                     <div class="flex rounded-lg border border-gray-200 p-1 bg-gray-50">
@@ -480,44 +581,264 @@
                     <p class="text-xs text-gray-400 mt-1.5"
                        x-text="blendPastPapers ? 'AI questions will be replaced by matching past paper questions where available.' : 'All questions will be generated purely by AI — past papers are ignored.'"></p>
                 </div>
-            </template>
 
-            <!-- Page Range (PDF only, not past paper) -->
-            <template x-if="uploadType === 'pdf' && !isPastPaper">
-                <div class="grid grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Start Page</label>
-                        <input x-model.number="pageStart" type="number" min="1"
-                               class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                <!-- Page Range (PDF only) -->
+                <template x-if="uploadType === 'pdf'">
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Start Page</label>
+                            <input x-model.number="pageStart" type="number" min="1"
+                                   class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">End Page</label>
+                            <input x-model.number="pageEnd" type="number" min="1"
+                                   class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                        </div>
                     </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">End Page</label>
-                        <input x-model.number="pageEnd" type="number" min="1"
-                               class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                </template>
+
+                <!-- Sharing toggle -->
+                <div class="flex items-center gap-3">
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" x-model="isShared" class="sr-only peer">
+                        <div class="w-11 h-6 bg-gray-200 peer-focus:ring-2 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                    </label>
+                    <span class="text-sm text-gray-700">Share with same year group</span>
+                </div>
+
+                <!-- Submit -->
+                <button type="submit"
+                        :disabled="loading || (uploadType === 'pdf' ? !file : imageFiles.length === 0)"
+                        class="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 transition">
+                    <span x-show="!loading">
+                        <span x-show="uploadType === 'pdf'">📚 Upload & Process</span>
+                        <span x-show="uploadType === 'images'" x-text="'🖼️ Upload ' + imageFiles.length + ' Image' + (imageFiles.length === 1 ? '' : 's')"></span>
+                    </span>
+                    <span x-show="loading">Uploading…</span>
+                </button>
+            </form>
+        </div>
+
+        <!-- Past Paper Multi-Phase UI -->
+        <div x-show="isPastPaper" class="space-y-4">
+
+            <!-- Phase: select -->
+            <div x-show="ppPhase === 'select'" class="space-y-4">
+                <p class="text-sm text-gray-500">Select all PDFs — both Question Papers and Mark Schemes. AI will detect and pair them automatically.</p>
+
+                <!-- Multi-file input -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Upload both Question and Mark Scheme PDF Papers</label>
+                    <input type="file" accept=".pdf" multiple @change="onPpFilesChange"
+                           class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
+                    <p x-show="ppFiles.length" class="text-xs text-gray-500 mt-1"
+                       x-text="ppFiles.length + ' file' + (ppFiles.length === 1 ? '' : 's') + ' selected'"></p>
+                </div>
+
+                <!-- Subject -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Subject</label>
+                    <div x-show="!showNewSubject">
+                        <select x-model="subjectId"
+                                class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                            <template x-for="s in subjects" :key="s.id">
+                                <option :value="s.id" x-text="s.name"></option>
+                            </template>
+                        </select>
+                        <button type="button" @click="showNewSubject = true"
+                                class="text-sm text-indigo-600 mt-1 hover:underline">+ Create new subject</button>
+                    </div>
+                    <div x-show="showNewSubject" class="flex gap-2">
+                        <input x-model="newSubject" type="text" placeholder="Subject name"
+                               class="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                        <button type="button" @click="createSubject()"
+                                class="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700">Add</button>
+                        <button type="button" @click="showNewSubject = false"
+                                class="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm hover:bg-gray-200">Cancel</button>
                     </div>
                 </div>
-            </template>
 
-            <!-- Sharing toggle -->
-            <div class="flex items-center gap-3">
-                <label class="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" x-model="isShared" class="sr-only peer">
-                    <div class="w-11 h-6 bg-gray-200 peer-focus:ring-2 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
-                </label>
-                <span class="text-sm text-gray-700">Share with same year group</span>
+                <!-- Category (optional) -->
+                <div x-show="subjectId">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Category <span class="text-gray-400 font-normal">(optional)</span></label>
+                    <div x-show="!showNewCategory">
+                        <select x-model.number="categoryId"
+                                class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                            <option :value="null">— No category —</option>
+                            <template x-for="c in categories" :key="c.id">
+                                <option :value="c.id" x-text="c.name"></option>
+                            </template>
+                        </select>
+                        <button type="button" @click="showNewCategory = true"
+                                class="text-sm text-indigo-600 mt-1 hover:underline">+ Create new category</button>
+                    </div>
+                    <div x-show="showNewCategory" class="flex gap-2">
+                        <input x-model="newCategory" type="text" placeholder="Category name"
+                               class="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none">
+                        <button type="button" @click="createCategory()"
+                                class="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700">Add</button>
+                        <button type="button" @click="showNewCategory = false; newCategory = ''"
+                                class="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm hover:bg-gray-200">Cancel</button>
+                    </div>
+                </div>
+
+                <!-- Detect button -->
+                <button type="button" @click="startDetection()"
+                        :disabled="!ppFiles.length || !subjectId"
+                        class="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 transition">
+                    🔍 Detect Papers
+                </button>
             </div>
 
-            <!-- Submit -->
-            <button type="submit"
-                    :disabled="loading || (uploadType === 'pdf' ? !file : imageFiles.length === 0)"
-                    class="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 transition">
-                <span x-show="!loading">
-                    <span x-show="uploadType === 'pdf'" x-text="isPastPaper ? '📄 Upload Past Paper' : '📚 Upload & Process'"></span>
-                    <span x-show="uploadType === 'images'" x-text="'🖼️ Upload ' + imageFiles.length + ' Image' + (imageFiles.length === 1 ? '' : 's')"></span>
-                </span>
-                <span x-show="loading">Uploading…</span>
-            </button>
-        </form>
+            <!-- Phase: detecting -->
+            <div x-show="ppPhase === 'detecting'" class="space-y-3">
+                <div class="flex items-center justify-between">
+                    <h3 class="font-semibold text-gray-700">Detecting papers…</h3>
+                    <span class="text-xs text-gray-500"
+                          x-text="ppDetections.filter(f => f.status === 'detected' || f.status === 'failed').length + ' / ' + ppDetections.length + ' complete'"></span>
+                </div>
+
+                <div class="overflow-x-auto rounded-lg border border-gray-200">
+                    <table class="w-full text-sm">
+                        <thead class="bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
+                            <tr>
+                                <th class="px-3 py-2 text-left font-medium">Filename</th>
+                                <th class="px-3 py-2 text-left font-medium">Status</th>
+                                <th class="px-3 py-2 text-left font-medium">Type</th>
+                                <th class="px-3 py-2 text-left font-medium">Board</th>
+                                <th class="px-3 py-2 text-left font-medium">Year</th>
+                                <th class="px-3 py-2 text-left font-medium">Paper</th>
+                                <th class="px-3 py-2 text-left font-medium">Tier</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-100">
+                            <template x-for="(f, i) in ppDetections" :key="f.id || i">
+                                <tr class="hover:bg-gray-50">
+                                    <td class="px-3 py-2 font-medium text-gray-800 max-w-[160px] truncate" :title="f.filename" x-text="f.filename"></td>
+                                    <td class="px-3 py-2 whitespace-nowrap">
+                                        <span x-show="f.status === 'pending'" class="inline-flex items-center gap-1 text-gray-400 text-xs">
+                                            <svg class="animate-spin w-3 h-3" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                                            Pending
+                                        </span>
+                                        <span x-show="f.status === 'detected'" class="inline-flex items-center gap-1 text-green-600 text-xs">
+                                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
+                                            Detected
+                                        </span>
+                                        <span x-show="f.status === 'failed'" class="inline-flex items-center gap-1 text-red-500 text-xs">
+                                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                                            Failed
+                                        </span>
+                                    </td>
+                                    <td class="px-3 py-2 text-gray-600 text-xs whitespace-nowrap"
+                                        x-text="f.paper_type ? f.paper_type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : '—'"></td>
+                                    <td class="px-3 py-2 text-gray-600 text-xs" x-text="f.exam_board || '—'"></td>
+                                    <td class="px-3 py-2 text-gray-600 text-xs" x-text="f.exam_year || '—'"></td>
+                                    <td class="px-3 py-2 text-gray-600 text-xs" x-text="f.paper_number || '—'"></td>
+                                    <td class="px-3 py-2 text-gray-600 text-xs" x-text="f.tier || '—'"></td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+                <p class="text-xs text-gray-400">Analysing cover pages — results appear as each file is processed…</p>
+            </div>
+
+            <!-- Phase: confirm -->
+            <div x-show="ppPhase === 'confirm'" class="space-y-4">
+                <div class="flex items-center justify-between">
+                    <h3 class="font-semibold text-gray-700">Verify Detected Papers</h3>
+                    <button type="button" @click="resetPastPaper()"
+                            class="text-sm text-gray-400 hover:text-gray-600">← Start over</button>
+                </div>
+
+                <!-- Matched pairs -->
+                <div x-show="ppMatchedPairs.length > 0">
+                    <h4 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Matched Pairs</h4>
+                    <div class="space-y-3">
+                        <template x-for="(m, i) in ppMatches" :key="i">
+                            <div x-show="m.match_group !== null" class="rounded-lg border border-gray-200 overflow-hidden">
+                                <!-- Editable metadata row -->
+                                <div class="bg-gray-50 px-3 py-2 flex flex-wrap gap-2 items-center border-b border-gray-200">
+                                    <select x-model="ppMatches[i].exam_board"
+                                            class="px-2 py-1 border border-gray-200 rounded text-xs text-gray-700 bg-white focus:ring-1 focus:ring-indigo-400 outline-none">
+                                        <option value="">Board?</option>
+                                        <template x-for="b in ['AQA','Edexcel','OCR','WJEC','CCEA','Cambridge','Other']" :key="b">
+                                            <option :value="b" :selected="ppMatches[i].exam_board === b" x-text="b"></option>
+                                        </template>
+                                    </select>
+                                    <input x-model.number="ppMatches[i].exam_year" type="number" placeholder="Year"
+                                           min="2000" max="2099"
+                                           class="w-20 px-2 py-1 border border-gray-200 rounded text-xs text-gray-700 focus:ring-1 focus:ring-indigo-400 outline-none">
+                                    <input x-model="ppMatches[i].paper_number" type="text" placeholder="Paper No."
+                                           class="w-24 px-2 py-1 border border-gray-200 rounded text-xs text-gray-700 focus:ring-1 focus:ring-indigo-400 outline-none">
+                                    <select x-model="ppMatches[i].tier"
+                                            class="px-2 py-1 border border-gray-200 rounded text-xs text-gray-700 bg-white focus:ring-1 focus:ring-indigo-400 outline-none">
+                                        <option value="">All Tiers</option>
+                                        <option value="Foundation">Foundation</option>
+                                        <option value="Higher">Higher</option>
+                                    </select>
+                                </div>
+                                <!-- QP row -->
+                                <div class="px-3 py-2.5 flex items-center gap-2 text-sm">
+                                    <span class="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold bg-blue-100 text-blue-700">QP</span>
+                                    <span class="text-gray-700 truncate text-xs"
+                                          :title="(ppFileById(m.qp_id) || {}).filename"
+                                          x-text="(ppFileById(m.qp_id) || {}).filename || 'Unknown'"></span>
+                                </div>
+                                <!-- MS row -->
+                                <div x-show="m.ms_id" class="px-3 py-2.5 flex items-center gap-2 text-sm border-t border-gray-100">
+                                    <span class="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold bg-green-100 text-green-700">MS</span>
+                                    <span class="text-gray-700 truncate text-xs"
+                                          :title="(ppFileById(m.ms_id) || {}).filename"
+                                          x-text="(ppFileById(m.ms_id) || {}).filename || 'Unknown'"></span>
+                                </div>
+                                <div x-show="!m.ms_id" class="px-3 py-2 text-xs text-amber-500 border-t border-gray-100">
+                                    No mark scheme matched — AI will infer answers
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+
+                <!-- Unmatched files -->
+                <div x-show="ppUnmatchedFiles.length > 0">
+                    <h4 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Unmatched Files</h4>
+                    <div class="rounded-lg border border-amber-200 bg-amber-50 divide-y divide-amber-100">
+                        <template x-for="(m, i) in ppMatches" :key="'u' + i">
+                            <div x-show="m.match_group === null" class="px-3 py-2.5 flex items-center gap-2 text-sm">
+                                <span x-show="m.qp_id && !m.ms_id"
+                                      class="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold bg-blue-100 text-blue-700">QP</span>
+                                <span x-show="m.ms_id && !m.qp_id"
+                                      class="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold bg-green-100 text-green-700">MS</span>
+                                <span class="text-gray-700 truncate text-xs flex-1"
+                                      x-text="(ppFileById(m.qp_id || m.ms_id) || {}).filename || 'Unknown'"></span>
+                                <span class="text-xs text-amber-600 shrink-0"
+                                      x-text="(m.ms_id && !m.qp_id) ? 'Will be skipped' : 'No pair found'"></span>
+                            </div>
+                        </template>
+                    </div>
+                    <p class="text-xs text-gray-400 mt-1">Unmatched mark schemes won't be processed. Unmatched question papers will be processed without answers.</p>
+                </div>
+
+                <!-- Process button -->
+                <button type="button" @click="processPapers()"
+                        :disabled="ppProcessablePairs.length === 0"
+                        class="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 transition">
+                    📄 Process <span x-text="ppProcessablePairs.length"></span> Paper<span x-show="ppProcessablePairs.length !== 1">s</span>
+                </button>
+            </div>
+
+            <!-- Phase: submitting -->
+            <div x-show="ppPhase === 'submitting'" class="py-10 text-center">
+                <svg class="animate-spin w-8 h-8 mx-auto mb-3 text-indigo-500" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                <p class="text-sm text-gray-500">Submitting papers…</p>
+            </div>
+
+        </div>
     </div><!-- end left column -->
 
     <!-- Right column: pending OCR reviews -->

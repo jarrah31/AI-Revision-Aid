@@ -8,6 +8,7 @@ from backend.prompts.qa_extraction import QA_EXTRACTION_PROMPT
 from backend.prompts.mcq_generation import MCQ_GENERATION_PROMPT
 from backend.prompts.answer_judging import ANSWER_JUDGING_PROMPT
 from backend.prompts.past_paper_extraction import PAST_PAPER_EXTRACTION_PROMPT
+from backend.prompts.paper_type_detection import PAPER_TYPE_DETECTION_PROMPT
 from backend.prompts.fact_check import FACT_CHECK_PROMPT
 from backend.prompts.matching import MATCHING_PROMPT
 from backend.prompts.handwritten_ocr import HANDWRITTEN_OCR_PROMPT
@@ -142,6 +143,28 @@ def extract_qa_from_page(image_b64: str, subject: str) -> tuple[dict, dict]:
     )
     if message.stop_reason == "max_tokens":
         raise ValueError("Claude response was truncated (page too dense — try splitting into smaller page ranges)")
+    return json.loads(_strip_fences(message.content[0].text)), _calc_usage(message, model)
+
+
+def detect_paper_type(image_b64: str) -> tuple[dict, dict]:
+    """Send the first page of a PDF to Claude to detect paper type and metadata.
+    Returns (result_dict, usage_dict) where result has keys:
+      paper_type, exam_board, exam_year, paper_number, tier, subject
+    """
+    client = get_client()
+    model  = _get_ai_setting("ai_model_past_paper_extraction")  # reuse same vision model
+
+    message = client.messages.create(
+        model=model,
+        max_tokens=512,
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": image_b64}},
+                {"type": "text",  "text": PAPER_TYPE_DETECTION_PROMPT},
+            ],
+        }],
+    )
     return json.loads(_strip_fences(message.content[0].text)), _calc_usage(message, model)
 
 
