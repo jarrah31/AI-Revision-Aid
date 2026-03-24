@@ -45,7 +45,13 @@ MARK SCHEME PAGES (page_type "mark_scheme" or "both"):
 - questions[]: leave as [] for pure mark scheme pages
 
 COVER / INSTRUCTIONS PAGES (page_type "cover"):
-- Return {{"page_type": "cover", "questions": [], "answers": []}}
+- Extract exam metadata from the cover page and return:
+  {{"page_type": "cover", "questions": [], "answers": [],
+    "exam_board": "AQA|Edexcel|OCR|WJEC|CCEA|Cambridge|Other|null",
+    "exam_year": 2023,
+    "paper_number": "Paper 1|Paper 2|Unit 1|etc|null",
+    "tier": "Foundation|Higher|null"}}
+- Set a field to null if it is not visible on this page
 
 General rules:
 - Only extract actual exam questions — skip rubric text, page numbers, examiner use boxes

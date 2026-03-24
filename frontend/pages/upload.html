@@ -34,10 +34,6 @@
     // Past paper fields
     batchType: 'knowledge_organiser',
     blendPastPapers: false,
-    examBoard: '',
-    examYear: new Date().getFullYear(),
-    paperNumber: '',
-    tier: 'Higher',
 
     get isPastPaper() { return this.batchType === 'past_paper'; },
 
@@ -189,10 +185,6 @@
                 return;
             }
         }
-        if (this.isPastPaper && !this.examBoard) {
-            this.error = 'Please select an exam board for past paper uploads';
-            return;
-        }
         this.error = '';
         this.loading = true;
 
@@ -208,16 +200,10 @@
             if (!this.isPastPaper) {
                 formData.append('page_start', this.pageStart);
                 formData.append('page_end', this.pageEnd);
-            }
-            if (!this.isPastPaper) {
                 formData.append('blend_past_papers', this.blendPastPapers ? '1' : '0');
             }
-            if (this.isPastPaper) {
-                if (this.examBoard)   formData.append('exam_board', this.examBoard);
-                if (this.examYear)    formData.append('exam_year', this.examYear);
-                if (this.paperNumber) formData.append('paper_number', this.paperNumber);
-                if (this.tier)        formData.append('tier', this.tier);
-                if (this.msFile)      formData.append('mark_scheme_file', this.msFile);
+            if (this.isPastPaper && this.msFile) {
+                formData.append('mark_scheme_file', this.msFile);
             }
         } else {
             for (const img of this.imageFiles) {
@@ -226,12 +212,6 @@
             formData.append('is_handwritten', this.isHandwritten ? '1' : '0');
             if (!this.isPastPaper) {
                 formData.append('blend_past_papers', this.blendPastPapers ? '1' : '0');
-            }
-            if (this.isPastPaper) {
-                if (this.examBoard)   formData.append('exam_board', this.examBoard);
-                if (this.examYear)    formData.append('exam_year', this.examYear);
-                if (this.paperNumber) formData.append('paper_number', this.paperNumber);
-                if (this.tier)        formData.append('tier', this.tier);
             }
         }
 
@@ -499,65 +479,6 @@
                     </div>
                     <p class="text-xs text-gray-400 mt-1.5"
                        x-text="blendPastPapers ? 'AI questions will be replaced by matching past paper questions where available.' : 'All questions will be generated purely by AI — past papers are ignored.'"></p>
-                </div>
-            </template>
-
-            <!-- Past paper metadata (only when batch type = past_paper) -->
-            <template x-if="isPastPaper">
-                <div class="space-y-3 bg-blue-50 rounded-lg p-3 border border-blue-100">
-                    <p class="text-xs font-semibold text-blue-700 uppercase tracking-wide">Exam Paper Details</p>
-                    <div class="grid grid-cols-2 gap-3">
-                        <!-- Exam Board -->
-                        <div>
-                            <label class="block text-xs font-medium text-gray-600 mb-1">Exam Board <span class="text-red-500">*</span></label>
-                            <select x-model="examBoard" required
-                                    class="w-full px-2.5 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white">
-                                <option value="">Select board…</option>
-                                <option value="AQA">AQA</option>
-                                <option value="Edexcel">Edexcel</option>
-                                <option value="OCR">OCR</option>
-                                <option value="WJEC">WJEC</option>
-                                <option value="CCEA">CCEA</option>
-                                <option value="Cambridge">Cambridge (CAIE)</option>
-                                <option value="Other">Other</option>
-                            </select>
-                        </div>
-                        <!-- Year -->
-                        <div>
-                            <label class="block text-xs font-medium text-gray-600 mb-1">Year</label>
-                            <select x-model.number="examYear"
-                                    class="w-full px-2.5 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white">
-                                <template x-for="y in Array.from({length: 10}, (_, i) => new Date().getFullYear() - i)" :key="y">
-                                    <option :value="y" x-text="y"></option>
-                                </template>
-                            </select>
-                        </div>
-                        <!-- Paper Number -->
-                        <div>
-                            <label class="block text-xs font-medium text-gray-600 mb-1">Paper</label>
-                            <select x-model="paperNumber"
-                                    class="w-full px-2.5 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white">
-                                <option value="">Select…</option>
-                                <option value="Paper 1">Paper 1</option>
-                                <option value="Paper 2">Paper 2</option>
-                                <option value="Paper 3">Paper 3</option>
-                                <option value="Paper 4">Paper 4</option>
-                                <option value="Unit 1">Unit 1</option>
-                                <option value="Unit 2">Unit 2</option>
-                                <option value="Unit 3">Unit 3</option>
-                            </select>
-                        </div>
-                        <!-- Tier -->
-                        <div>
-                            <label class="block text-xs font-medium text-gray-600 mb-1">Tier</label>
-                            <select x-model="tier"
-                                    class="w-full px-2.5 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white">
-                                <option value="Higher">Higher</option>
-                                <option value="Foundation">Foundation</option>
-                                <option value="N/A">N/A (not tiered)</option>
-                            </select>
-                        </div>
-                    </div>
                 </div>
             </template>
 

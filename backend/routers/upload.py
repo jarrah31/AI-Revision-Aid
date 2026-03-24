@@ -265,6 +265,23 @@ def process_batch(
                             if ref and answer:
                                 ms_answers_inline[ref] = answer
 
+                    # Extract exam metadata from cover page
+                    if page_type == "cover":
+                        eb  = result.get("exam_board")
+                        ey  = result.get("exam_year")
+                        pn  = result.get("paper_number")
+                        tr  = result.get("tier")
+                        if any(v is not None for v in (eb, ey, pn, tr)):
+                            db.execute(
+                                """UPDATE upload_batches
+                                   SET exam_board = COALESCE(?, exam_board),
+                                       exam_year  = COALESCE(?, exam_year),
+                                       paper_number = COALESCE(?, paper_number),
+                                       tier       = COALESCE(?, tier)
+                                   WHERE id = ?""",
+                                (eb, ey, pn, tr, batch_id),
+                            )
+
                     # Skip pages with no exam questions
                     if page_type not in _QUESTION_PAGE_TYPES:
                         db.execute(
@@ -658,10 +675,6 @@ async def upload_pdf(
     blend_past_papers: int = Form(1),
     category_id: int | None = Form(None),
     subcategory_id: int | None = Form(None),
-    exam_board: str | None = Form(None),
-    exam_year: int | None = Form(None),
-    paper_number: str | None = Form(None),
-    tier: str | None = Form(None),
     mark_scheme_file: Optional[UploadFile] = File(None),
     user: dict = Depends(get_current_user),
     db: sqlite3.Connection = Depends(get_db),
@@ -715,22 +728,19 @@ async def upload_pdf(
     if source_type != "images":
         is_handwritten = 0
 
-    # Create batch record first to get ID (page_end resolved after PDF is saved for PDFs)
+    # Create batch record first to get ID (page_end resolved after PDF is saved for PDFs;
+    # exam_board/year/paper_number/tier filled in during processing from the cover page)
     _page_end_placeholder = page_end if page_end is not None else 1
     cursor = db.execute(
         """INSERT INTO upload_batches
            (user_id, subject_id, category_id, subcategory_id, filename, pdf_path,
             page_start, page_end, total_pages, is_shared, status, batch_type,
-            source_type, is_handwritten, exam_board, exam_year, paper_number, tier)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)""",
+            source_type, is_handwritten)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)""",
         (
             user["id"], subject_id, category_id, subcategory_id, filename, "",
             page_start, _page_end_placeholder, _page_end_placeholder - page_start + 1, is_shared,
             batch_type, source_type, is_handwritten,
-            exam_board if batch_type == "past_paper" else None,
-            exam_year if batch_type == "past_paper" else None,
-            paper_number if batch_type == "past_paper" else None,
-            tier if batch_type == "past_paper" else None,
         ),
     )
     db.commit()
