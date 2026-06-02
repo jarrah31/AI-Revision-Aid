@@ -316,38 +316,37 @@ def process_batch(
                     (usage["cost_usd"], batch_id),
                 )
 
-                # Process image regions (KO batches only — past papers rarely need image crops)
+                # Process image regions — crop figures/diagrams for both KO and past-paper pages
                 image_id_map = {}  # index -> db image id
-                if batch_type != "past_paper":
-                    for i, img_data in enumerate(result.get("images", [])):
-                        filename, width, height = crop_image_region(
+                for i, img_data in enumerate(result.get("images", [])):
+                    filename, width, height = crop_image_region(
+                        batch_id,
+                        display_page,
+                        i,
+                        png_bytes,
+                        img_data.get("bbox_x_pct", 0),
+                        img_data.get("bbox_y_pct", 0),
+                        img_data.get("bbox_w_pct", 100),
+                        img_data.get("bbox_h_pct", 100),
+                    )
+                    cursor = db.execute(
+                        """INSERT INTO images (batch_id, page_number, filename, description,
+                           crop_x, crop_y, crop_w, crop_h, width, height)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
                             batch_id,
                             display_page,
-                            i,
-                            png_bytes,
-                            img_data.get("bbox_x_pct", 0),
-                            img_data.get("bbox_y_pct", 0),
-                            img_data.get("bbox_w_pct", 100),
-                            img_data.get("bbox_h_pct", 100),
-                        )
-                        cursor = db.execute(
-                            """INSERT INTO images (batch_id, page_number, filename, description,
-                               crop_x, crop_y, crop_w, crop_h, width, height)
-                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                            (
-                                batch_id,
-                                display_page,
-                                filename,
-                                img_data.get("description", ""),
-                                img_data.get("bbox_x_pct"),
-                                img_data.get("bbox_y_pct"),
-                                img_data.get("bbox_w_pct"),
-                                img_data.get("bbox_h_pct"),
-                                width,
-                                height,
-                            ),
-                        )
-                        image_id_map[i] = cursor.lastrowid
+                            filename,
+                            img_data.get("description", ""),
+                            img_data.get("bbox_x_pct"),
+                            img_data.get("bbox_y_pct"),
+                            img_data.get("bbox_w_pct"),
+                            img_data.get("bbox_h_pct"),
+                            width,
+                            height,
+                        ),
+                    )
+                    image_id_map[i] = cursor.lastrowid
 
                 # Store questions
                 for q in result.get("questions", []):
