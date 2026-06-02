@@ -33,6 +33,31 @@ Alpine.data('uploadHistoryPage', () => ({
             'pending':    'bg-gray-100 text-gray-600',
             'failed':     'bg-red-100 text-red-700',
         }[s] || 'bg-gray-100 text-gray-600';
+    },
+
+    optionChips(b) {
+        const chips = [];
+        if (b.is_handwritten) {
+            chips.push('Handwritten');
+        } else if (b.source_type === 'images') {
+            chips.push('Images');
+        } else {
+            chips.push('PDF');
+        }
+        if (b.batch_type === 'knowledge_organiser') {
+            chips.push('Knowledge Organiser');
+        }
+        if (b.category_name && b.subcategory_name) {
+            chips.push(b.category_name + ' › ' + b.subcategory_name);
+        } else if (b.category_name) {
+            chips.push(b.category_name);
+        } else if (b.subcategory_name) {
+            chips.push(b.subcategory_name);
+        }
+        if (b.tier) {
+            chips.push(b.tier);
+        }
+        return chips;
     }
 }));
 </script>
@@ -110,6 +135,13 @@ Alpine.data('uploadHistoryPage', () => ({
                             (<span x-text="b.approved_count"></span> approved)
                             &middot; <span x-text="new Date(b.created_at).toLocaleDateString()"></span>
                         </p>
+                        <!-- Options chips -->
+                        <div class="flex flex-wrap gap-1 mt-1">
+                            <template x-for="chip in optionChips(b)" :key="chip">
+                                <span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600"
+                                      x-text="chip"></span>
+                            </template>
+                        </div>
                         <p x-show="b.error_message" class="text-xs text-red-500 mt-1" x-text="b.error_message"></p>
                     </div>
 

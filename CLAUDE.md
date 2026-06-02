@@ -30,6 +30,11 @@ Card labels come from `_AI_SETTING_METADATA` dict in `backend/routers/admin.py`.
 3. GitHub Actions (`publish.yml`) builds multi-platform image (amd64 + arm64) and pushes to `ghcr.io/jarrah31/ai-revision-aid`
 4. **Never build Docker images locally** — Actions handles it; monitor with `gh run list`
 5. **Always update `APP_VERSION` in `backend/app.py`** to match the new tag before committing and tagging — this is what the home page displays.
+6. **Always create a GitHub Release** after pushing the tag:
+   ```
+   gh release create v1.x.0 --title "v1.x.0" --notes "..." --latest
+   ```
+   Summarise the key changes in `--notes`. This publishes the release on GitHub so users can see the changelog.
 
 ## Git Remote
 GitHub: `https://github.com/jarrah31/AI-Revision-Aid.git` (not Bitbucket)

@@ -78,7 +78,10 @@ def get_cost_history(
         """SELECT b.id, b.filename, b.page_start, b.page_end, b.total_pages,
                   b.processed_pages, b.status, b.is_shared, b.cost_usd,
                   b.created_at, b.completed_at, b.error_message,
+                  b.batch_type, b.source_type, b.is_handwritten, b.tier,
                   s.name as subject_name,
+                  c.name as category_name,
+                  sc.name as subcategory_name,
                   (SELECT COUNT(*) FROM questions q WHERE q.batch_id = b.id) as question_count,
                   (SELECT COUNT(*) FROM questions q WHERE q.batch_id = b.id AND q.approved = 1) as approved_count,
                   (SELECT SUM(au.input_tokens) FROM api_usage au WHERE au.batch_id = b.id) as input_tokens,
@@ -86,6 +89,8 @@ def get_cost_history(
                   (SELECT COUNT(*) FROM api_usage au WHERE au.batch_id = b.id) as api_calls
            FROM upload_batches b
            JOIN subjects s ON s.id = b.subject_id
+           LEFT JOIN categories c ON c.id = b.category_id
+           LEFT JOIN subcategories sc ON sc.id = b.subcategory_id
            WHERE b.user_id = ?
            ORDER BY b.created_at DESC""",
         (user["id"],),
