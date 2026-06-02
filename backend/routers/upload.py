@@ -144,14 +144,14 @@ def _match_and_replace_with_past_papers(
     if not ko_questions:
         return
 
+    # No LIMIT: the matcher needs the full past-paper corpus. (Large corpora raise AI token cost — an accepted trade-off.)
     past_paper_qs = db.execute(
         """SELECT q.id, q.question_text, q.answer_text,
                   b.exam_board, b.exam_year, b.paper_number
            FROM questions q
            JOIN upload_batches b ON b.id = q.batch_id
            WHERE q.subject_id = ? AND q.user_id = ? AND q.question_source = 'past_paper'
-           ORDER BY q.id DESC
-           LIMIT 100""",
+           ORDER BY q.id DESC""",
         (subject_id, user_id),
     ).fetchall()
     if not past_paper_qs:
