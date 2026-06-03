@@ -22,6 +22,7 @@
     showAnswer: false,
     typedAnswer: '',
     selectedOption: null,
+    selectedOptions: [],
     result: null,
     submitting: false,
     startTime: null,
@@ -138,6 +139,8 @@
     },
 
     get currentFormat() {
+        const cq = this.currentQuestion;
+        if (cq && cq.multi_response) return 'multi_response';
         const allModes = ['flashcard', 'mcq', 'typed'];
         const pool = this.selectedModes.length > 0 ? this.selectedModes : allModes;
         const q = this.currentQuestion;
@@ -280,6 +283,7 @@
         this.showAnswer = false;
         this.typedAnswer = '';
         this.selectedOption = null;
+        this.selectedOptions = [];
         this.result = null;
         this.selectedQuality = null;
         this.showSource = false;
@@ -325,6 +329,21 @@
     async submitTyped() {
         if (!this.typedAnswer.trim()) return;
         await this.submitAnswer('typed', this.typedAnswer, null);
+    },
+
+    toggleOption(text) {
+        const q = this.currentQuestion;
+        const max = q?.multi_response?.select_count || 1;
+        if (this.selectedOptions.includes(text)) {
+            this.selectedOptions = this.selectedOptions.filter(t => t !== text);
+        } else if (this.selectedOptions.length < max) {
+            this.selectedOptions = [...this.selectedOptions, text];
+        }
+    },
+
+    async submitMultiResponse() {
+        if (!this.selectedOptions.length) return;
+        await this.submitAnswer('multi_response', JSON.stringify(this.selectedOptions), null);
     },
 
     async submitAnswer(format, answer, quality) {
@@ -731,6 +750,40 @@
                 </div>
             </div>
 
+            <!-- MULTI-RESPONSE FORMAT -->
+            <div x-show="currentFormat === 'multi_response' && !result" class="space-y-2">
+                <p class="text-sm text-gray-500 mb-1">
+                    Select <span class="font-semibold" x-text="currentQuestion?.multi_response?.select_count"></span>
+                    <span x-text="(currentQuestion?.multi_response?.select_count === 1) ? 'answer' : 'answers'"></span>
+                    <span class="text-gray-400"
+                          x-text="'(' + selectedOptions.length + '/' + (currentQuestion?.multi_response?.select_count || 0) + ' selected)'"></span>
+                </p>
+                <template x-for="(opt, idx) in (currentQuestion?.multi_response?.options || [])" :key="idx">
+                    <button @click="toggleOption(opt.text)"
+                            :class="selectedOptions.includes(opt.text) ? 'border-indigo-600 bg-indigo-50' : 'border-gray-200 hover:border-gray-300'"
+                            class="w-full text-left p-3 rounded-lg border-2 text-sm transition flex items-start gap-2">
+                        <span class="mt-0.5 w-4 h-4 shrink-0 rounded border flex items-center justify-center"
+                              :class="selectedOptions.includes(opt.text) ? 'bg-indigo-600 border-indigo-600' : 'border-gray-300'">
+                            <svg x-show="selectedOptions.includes(opt.text)" class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/>
+                            </svg>
+                        </span>
+                        <span x-text="opt.text"></span>
+                    </button>
+                </template>
+                <div class="flex gap-2 mt-3">
+                    <button @click="submitMultiResponse()" :disabled="!selectedOptions.length || submitting"
+                            class="flex-1 bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 transition">
+                        <span x-show="!submitting">Submit</span>
+                        <span x-show="submitting">Checking...</span>
+                    </button>
+                    <button @click="skipQuestion()" :disabled="submitting"
+                            class="px-4 py-2.5 rounded-lg text-sm font-medium text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition disabled:opacity-50">
+                        Skip
+                    </button>
+                </div>
+            </div>
+
             <!-- RESULT (shown after MCQ/Typed answer only) -->
             <div x-show="result && currentFormat !== 'flashcard'" class="space-y-3 mt-4">
                 <div class="rounded-lg p-4"
@@ -742,6 +795,17 @@
                        :class="result?.is_correct ? 'text-green-600' : 'text-red-600'"
                        x-text="'Answer: ' + (result?.correct_answer || '')"></p>
                     <p x-show="result?.feedback" class="text-sm mt-2 text-gray-600" x-text="result?.feedback"></p>
+                </div>
+                <div x-show="currentFormat === 'multi_response'" class="space-y-1.5">
+                    <template x-for="(opt, idx) in (currentQuestion?.multi_response?.options || [])" :key="idx">
+                        <div class="flex items-start gap-2 text-sm p-2 rounded-lg"
+                             :class="(result?.correct_options || []).includes(opt.text)
+                                 ? 'bg-green-50 text-green-800'
+                                 : (selectedOptions.includes(opt.text) ? 'bg-red-50 text-red-700' : 'text-gray-500')">
+                            <span x-text="(result?.correct_options || []).includes(opt.text) ? '✓' : (selectedOptions.includes(opt.text) ? '✕' : '·')"></span>
+                            <span x-text="opt.text"></span>
+                        </div>
+                    </template>
                 </div>
                 <!-- Next button for both correct and incorrect -->
                 <button x-show="result" @click="nextQuestion()"
