@@ -273,8 +273,8 @@ Alpine.data('pastPapersPage', () => ({
     </template>
 
     <!-- Re-crop modal -->
-    <div x-show="recrop.open" x-cloak
-         class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+    <template x-if="recrop.open">
+    <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
         <div class="bg-white rounded-lg p-4 max-w-3xl w-full">
             <h3 class="font-semibold mb-2">Re-crop figure — drag the box, drag the corner to resize</h3>
             <div class="relative inline-block select-none"
@@ -294,4 +294,5 @@ Alpine.data('pastPapersPage', () => ({
             </div>
         </div>
     </div>
+    </template>
 </div>
