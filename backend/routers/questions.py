@@ -197,6 +197,9 @@ def update_question(
     if req.difficulty is not None:
         updates.append("difficulty = ?")
         params.append(req.difficulty)
+    if req.question_ref is not None:
+        updates.append("question_ref = ?")
+        params.append(req.question_ref)
 
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")

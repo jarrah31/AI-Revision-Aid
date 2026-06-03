@@ -44,3 +44,23 @@ def test_list_questions_filters_by_source(
     assert r.status_code == 200
     ids = [q["id"] for q in r.json()["questions"]]
     assert ids == [pp_q]
+
+
+def test_update_question_persists_question_ref(
+    client, db_conn, regular_user, user_headers, make_subject, make_batch, make_question
+):
+    user_id, _ = regular_user
+    subject_id = make_subject()
+    batch_id = make_batch(user_id, subject_id)
+    q_id = make_question(batch_id, user_id, subject_id)
+
+    r = client.put(
+        f"/api/questions/{q_id}",
+        headers=user_headers,
+        json={"question_ref": "1a"},
+    )
+    assert r.status_code == 200
+    row = db_conn.execute(
+        "SELECT question_ref FROM questions WHERE id=?", (q_id,)
+    ).fetchone()
+    assert row["question_ref"] == "1a"
