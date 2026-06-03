@@ -4,7 +4,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
 from backend.auth import get_current_user
 from backend.database import get_db
-from backend.models import QuestionUpdate
+from backend.models import ApproveIdsRequest, QuestionUpdate
 from backend.services.claude_service import fact_check_question
 from backend.services.mcq_service import ensure_mcq_options_bg
 
@@ -254,6 +254,44 @@ def approve_batch(
 
     if question_ids:
         background_tasks.add_task(ensure_mcq_options_bg, question_ids, user["id"])
+    return {"message": f"{count} questions approved"}
+
+
+@router.post("/approve-ids")
+def approve_ids(
+    req: ApproveIdsRequest,
+    background_tasks: BackgroundTasks,
+    user: dict = Depends(get_current_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Approve a specific list of the user's questions in one request.
+
+    Used by the category/subcategory review pages' 'Approve All', whose
+    questions can span multiple batches. Schedules a SINGLE background MCQ
+    task for the whole set (grouped by subject into one Claude call) rather
+    than one task — and one API call — per question.
+    """
+    if not req.question_ids:
+        return {"message": "0 questions approved"}
+
+    placeholders = ",".join("?" for _ in req.question_ids)
+    to_approve = db.execute(
+        f"""SELECT id FROM questions
+            WHERE id IN ({placeholders}) AND user_id = ? AND approved = 0""",
+        (*req.question_ids, user["id"]),
+    ).fetchall()
+    question_ids = [r["id"] for r in to_approve]
+    if not question_ids:
+        return {"message": "0 questions approved"}
+
+    update_ph = ",".join("?" for _ in question_ids)
+    count = db.execute(
+        f"UPDATE questions SET approved = 1 WHERE id IN ({update_ph})",
+        question_ids,
+    ).rowcount
+    db.commit()
+
+    background_tasks.add_task(ensure_mcq_options_bg, question_ids, user["id"])
     return {"message": f"{count} questions approved"}
 
 

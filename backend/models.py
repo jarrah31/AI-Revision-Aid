@@ -51,6 +51,10 @@ class QuestionUpdate(BaseModel):
     question_ref: str | None = None
 
 
+class ApproveIdsRequest(BaseModel):
+    question_ids: list[int]
+
+
 # Categories
 class CategoryCreate(BaseModel):
     subject_id: int

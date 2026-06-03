@@ -101,7 +101,7 @@ Alpine.data('reviewCategoryPage', () => ({
         if (!pending.length) return;
         this.approvingAll = true;
         try {
-            await Promise.all(pending.map(q => API.post('/questions/' + q.id + '/approve')));
+            await API.post('/questions/approve-ids', { question_ids: pending.map(q => q.id) });
             this.questions.forEach(q => { q.approved = 1; });
             Alpine.store('app').showToast(pending.length + ' question' + (pending.length !== 1 ? 's' : '') + ' approved', 'success');
         } catch (e) {

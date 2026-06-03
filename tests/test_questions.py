@@ -169,6 +169,90 @@ def test_approve_batch(
         assert row["approved"] == 1
 
 
+def test_approve_ids_approves_listed_questions(
+    client, user_headers, regular_user, make_subject, make_batch, make_question, db_conn
+):
+    uid, _ = regular_user
+    sid = make_subject()
+    bid = make_batch(uid, sid)
+    q1 = make_question(bid, uid, sid, approved=0)
+    q2 = make_question(bid, uid, sid, question_text="Q2?", answer_text="A2.", approved=0)
+    q3 = make_question(bid, uid, sid, question_text="Q3?", answer_text="A3.", approved=0)
+
+    # Approve only q1 and q2
+    r = client.post(
+        "/api/questions/approve-ids",
+        headers=user_headers,
+        json={"question_ids": [q1, q2]},
+    )
+    assert r.status_code == 200
+    assert "2" in r.json()["message"]
+
+    assert db_conn.execute("SELECT approved FROM questions WHERE id=?", (q1,)).fetchone()["approved"] == 1
+    assert db_conn.execute("SELECT approved FROM questions WHERE id=?", (q2,)).fetchone()["approved"] == 1
+    assert db_conn.execute("SELECT approved FROM questions WHERE id=?", (q3,)).fetchone()["approved"] == 0
+
+
+def test_approve_ids_schedules_single_mcq_task(
+    client, user_headers, regular_user, make_subject, make_batch, make_question, monkeypatch
+):
+    """The whole list must be handed to ONE background MCQ task, not one per id."""
+    import backend.routers.questions as q_router
+    calls = []
+    monkeypatch.setattr(q_router, "ensure_mcq_options_bg", lambda ids, user_id: calls.append(list(ids)))
+
+    uid, _ = regular_user
+    sid = make_subject()
+    bid = make_batch(uid, sid)
+    q1 = make_question(bid, uid, sid, approved=0)
+    q2 = make_question(bid, uid, sid, question_text="Q2?", answer_text="A2.", approved=0)
+    q3 = make_question(bid, uid, sid, question_text="Q3?", answer_text="A3.", approved=0)
+
+    r = client.post(
+        "/api/questions/approve-ids",
+        headers=user_headers,
+        json={"question_ids": [q1, q2, q3]},
+    )
+    assert r.status_code == 200
+    # Exactly one background task, carrying all three ids
+    assert len(calls) == 1
+    assert sorted(calls[0]) == sorted([q1, q2, q3])
+
+
+def test_approve_ids_ignores_other_users_questions(
+    client, user_headers, regular_user, second_user, make_subject, make_batch, make_question, db_conn
+):
+    owner_id, _ = regular_user
+    other_id, _ = second_user
+    sid = make_subject()
+    mine = make_batch(owner_id, sid)
+    theirs = make_batch(other_id, sid)
+    my_q = make_question(mine, owner_id, sid, approved=0)
+    foreign_q = make_question(theirs, other_id, sid, approved=0)
+
+    r = client.post(
+        "/api/questions/approve-ids",
+        headers=user_headers,
+        json={"question_ids": [my_q, foreign_q]},
+    )
+    assert r.status_code == 200
+    assert "1" in r.json()["message"]  # only my_q approved
+    assert db_conn.execute("SELECT approved FROM questions WHERE id=?", (my_q,)).fetchone()["approved"] == 1
+    assert db_conn.execute("SELECT approved FROM questions WHERE id=?", (foreign_q,)).fetchone()["approved"] == 0
+
+
+def test_approve_ids_empty_list_is_noop(
+    client, user_headers, regular_user, monkeypatch
+):
+    import backend.routers.questions as q_router
+    calls = []
+    monkeypatch.setattr(q_router, "ensure_mcq_options_bg", lambda ids, user_id: calls.append(list(ids)))
+
+    r = client.post("/api/questions/approve-ids", headers=user_headers, json={"question_ids": []})
+    assert r.status_code == 200
+    assert calls == []  # no background task scheduled
+
+
 def test_approve_page(
     client, user_headers, regular_user, make_subject, make_batch, make_question, db_conn
 ):
