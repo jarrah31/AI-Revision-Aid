@@ -14,6 +14,7 @@ Alpine.data('pastPapersPage', () => ({
     bulkSubcategoryId: '',
     editing: null,
     editForm: {},
+    _redetecting: false,
 
     async init() {
         this.loading = true;
@@ -163,6 +164,23 @@ Alpine.data('pastPapersPage', () => ({
         await API.put(`/past-papers/questions/${q.id}/image`, { image_id: null });
         q.image_filename = null; q.image_id = null;
     },
+
+    async redetectMultiResponse(paper) {
+        if (this._redetecting) return;
+        this._redetecting = true;
+        try {
+            const res = await API.post(`/past-papers/${paper.id}/detect-multi-response`, {});
+            Alpine.store('app').showToast(`Re-detected: ${res.updated} of ${res.scanned} question(s) structured`, 'success');
+            // Refresh the currently shown paper's questions
+            if (this.subjectId) {
+                this.papers = await API.get(`/past-papers?subject_id=${this.subjectId}`);
+            }
+        } catch (e) {
+            Alpine.store('app').showToast(e.message || 'Re-detect failed', 'error');
+        } finally {
+            this._redetecting = false;
+        }
+    },
 }));
 </script>
 
@@ -192,8 +210,15 @@ Alpine.data('pastPapersPage', () => ({
                     <span class="text-sm text-gray-500"
                           x-text="`${p.question_count} questions · ${p.figure_count} figures`"></span>
                 </button>
-                <button @click="deletePaper(p)"
-                        class="text-red-600 text-sm hover:underline">Delete paper</button>
+                <div class="flex items-center gap-2">
+                    <button @click="redetectMultiResponse(p)" :disabled="_redetecting"
+                            class="px-2.5 py-1.5 rounded-lg text-xs font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 transition disabled:opacity-50"
+                            title="Re-scan this paper for tick-box (multiple-response) questions">
+                        Re-detect tick-box Qs
+                    </button>
+                    <button @click="deletePaper(p)"
+                            class="text-red-600 text-sm hover:underline">Delete paper</button>
+                </div>
             </div>
 
             <div x-show="expanded[p.id]" class="border-t p-3 space-y-3">
