@@ -56,6 +56,11 @@
         this.$watch('selectedCategoryIds',  () => this.loadAvailableCount());
         this.$watch('selectedSubcategoryIds', () => this.loadAvailableCount());
         this.$watch('questionSources',      () => this.loadAvailableCount());
+        this.$watch('questionSources', () => {
+            if (this.questionSources.length === 1 && this.questionSources[0] === 'past_paper') {
+                this.selectedModes = this.selectedModes.filter(m => m !== 'mcq');
+            }
+        });
         sessionStorage.removeItem('ra_quiz'); // clean up old single-quiz key
         localStorage.removeItem('ra_quizzes'); // clean up old localStorage key
         await this._loadSavedQuizzes();
@@ -74,6 +79,18 @@
         } else {
             this.selectedModes = [...this.selectedModes, id];
         }
+    },
+
+    availableModes() {
+        const all = [
+            {id: 'flashcard', label: 'Flashcard'},
+            {id: 'mcq',       label: 'Multiple Choice'},
+            {id: 'typed',     label: 'Type Answer'},
+        ];
+        // Past papers never have AI MCQ distractors — drop the MCQ mode when the
+        // user has restricted the quiz to Past Paper questions only.
+        const pastPaperOnly = this.questionSources.length === 1 && this.questionSources[0] === 'past_paper';
+        return pastPaperOnly ? all.filter(m => m.id !== 'mcq') : all;
     },
 
     async selectSubject(id) {
@@ -549,8 +566,8 @@
                         </label>
                         <span class="text-xs text-gray-400">Leave unselected for all</span>
                     </div>
-                    <div class="grid grid-cols-3 gap-2">
-                        <template x-for="m in [{id:'flashcard',label:'Flashcard'},{id:'mcq',label:'Multiple Choice'},{id:'typed',label:'Type Answer'}]" :key="m.id">
+                    <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                        <template x-for="m in availableModes()" :key="m.id">
                             <button @click="toggleMode(m.id)"
                                     :class="selectedModes.includes(m.id)
                                         ? 'bg-indigo-600 text-white ring-2 ring-indigo-300'
