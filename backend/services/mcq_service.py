@@ -18,7 +18,10 @@ def ensure_mcq_options(questions: list[dict], db: sqlite3.Connection, user_id: i
     """
     need_mcq = [
         q for q in questions
-        if db.execute(
+        # Past-paper questions are real exam Q&A — never fabricate AI distractors
+        # for them (quiz mode presents them as typed/self-marked instead).
+        if q.get("question_source") != "past_paper"
+        and db.execute(
             "SELECT COUNT(*) as c FROM mcq_options WHERE question_id = ?", (q["id"],)
         ).fetchone()["c"] == 0
     ]
