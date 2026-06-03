@@ -26,6 +26,7 @@ from backend.services.claude_service import (
     extract_sections_from_handwritten,
     extract_qa_from_text,
 )
+from backend.services.multi_response_service import detect_and_store_multi_response
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
 
@@ -414,6 +415,15 @@ def process_batch(
                 except Exception as e:
                     print(f"Mark scheme processing failed (non-fatal): {e}")
                     traceback.print_exc()
+
+            # 3) Structure multiple-response ("tick N boxes") questions now that
+            #    mark-scheme answers (which mark correctness) have been applied.
+            try:
+                n = detect_and_store_multi_response(batch_id, subject_name, user_id, db)
+                if n:
+                    print(f"[multi_response] structured {n} question(s) for batch {batch_id}")
+            except Exception as e:
+                print(f"[multi_response] step failed (non-fatal): {e}")
 
         elif batch_type == "knowledge_organiser" and blend_past_papers:
             # Replace AI questions with past paper equivalents where found
