@@ -14,7 +14,7 @@ Alpine.data('pastPapersPage', () => ({
     bulkSubcategoryId: '',
     editing: null,
     editForm: {},
-    _redetecting: false,
+    _redetectingId: null,   // id of the paper currently being re-detected (null = none)
 
     async init() {
         this.loading = true;
@@ -166,11 +166,14 @@ Alpine.data('pastPapersPage', () => ({
     },
 
     async redetectMultiResponse(paper) {
-        if (this._redetecting) return;
-        this._redetecting = true;
+        if (this._redetectingId !== null) return;   // one at a time
+        this._redetectingId = paper.id;
         try {
             const res = await API.post(`/past-papers/${paper.id}/detect-multi-response`, {});
-            Alpine.store('app').showToast(`Re-detected: ${res.updated} of ${res.scanned} question(s) structured`, 'success');
+            const msg = res.updated > 0
+                ? `Structured ${res.updated} tick-box question${res.updated === 1 ? '' : 's'} (scanned ${res.scanned}).`
+                : `No tick-box questions found (scanned ${res.scanned}).`;
+            Alpine.store('app').showToast(msg, 'success');
             // Refresh the currently shown paper's questions
             if (this.subjectId) {
                 this.papers = await API.get(`/past-papers?subject_id=${this.subjectId}`);
@@ -178,7 +181,7 @@ Alpine.data('pastPapersPage', () => ({
         } catch (e) {
             Alpine.store('app').showToast(e.message || 'Re-detect failed', 'error');
         } finally {
-            this._redetecting = false;
+            this._redetectingId = null;
         }
     },
 }));
@@ -211,10 +214,16 @@ Alpine.data('pastPapersPage', () => ({
                           x-text="`${p.question_count} questions · ${p.figure_count} figures`"></span>
                 </button>
                 <div class="flex items-center gap-2">
-                    <button @click="redetectMultiResponse(p)" :disabled="_redetecting"
-                            class="px-2.5 py-1.5 rounded-lg text-xs font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 transition disabled:opacity-50"
+                    <button @click="redetectMultiResponse(p)" :disabled="_redetectingId !== null"
+                            class="px-2.5 py-1.5 rounded-lg text-xs font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 transition disabled:opacity-50 inline-flex items-center gap-1.5"
                             title="Re-scan this paper for tick-box (multiple-response) questions">
-                        Re-detect tick-box Qs
+                        <template x-if="_redetectingId === p.id">
+                            <svg class="animate-spin h-3.5 w-3.5 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                            </svg>
+                        </template>
+                        <span x-text="_redetectingId === p.id ? `Scanning ${p.question_count} questions…` : 'Re-detect tick-box Qs'"></span>
                     </button>
                     <button @click="deletePaper(p)"
                             class="text-red-600 text-sm hover:underline">Delete paper</button>
