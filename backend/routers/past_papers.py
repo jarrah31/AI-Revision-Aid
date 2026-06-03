@@ -58,3 +58,56 @@ def delete_past_paper(
     db.execute("DELETE FROM upload_batches WHERE id = ?", (batch_id,))
     db.commit()
     return {"message": "Past paper deleted"}
+
+
+class TagRequest(BaseModel):
+    question_ids: list[int]
+    category_id: int | None = None
+    subcategory_id: int | None = None
+
+
+@router.post("/tag")
+def tag_questions(
+    req: TagRequest,
+    user: dict = Depends(get_current_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Set (or clear) category/subcategory on the user's questions. Per-question or bulk."""
+    if not req.question_ids:
+        return {"message": "No questions to tag", "updated": 0}
+
+    placeholders = ",".join("?" for _ in req.question_ids)
+    owned = db.execute(
+        f"""SELECT id, subject_id FROM questions
+            WHERE id IN ({placeholders}) AND user_id = ?""",
+        (*req.question_ids, user["id"]),
+    ).fetchall()
+    if not owned:
+        return {"message": "No matching questions", "updated": 0}
+
+    if req.category_id is not None:
+        subject_ids = {row["subject_id"] for row in owned}
+        cat = db.execute(
+            "SELECT subject_id FROM categories WHERE id = ?", (req.category_id,)
+        ).fetchone()
+        if not cat or cat["subject_id"] not in subject_ids:
+            raise HTTPException(
+                status_code=400, detail="Category does not belong to the question's subject"
+            )
+    if req.subcategory_id is not None:
+        sub = db.execute(
+            "SELECT category_id FROM subcategories WHERE id = ?", (req.subcategory_id,)
+        ).fetchone()
+        if not sub or sub["category_id"] != req.category_id:
+            raise HTTPException(
+                status_code=400, detail="Subcategory does not belong to the category"
+            )
+
+    owned_ids = [row["id"] for row in owned]
+    ph = ",".join("?" for _ in owned_ids)
+    db.execute(
+        f"UPDATE questions SET category_id = ?, subcategory_id = ? WHERE id IN ({ph})",
+        (req.category_id, req.subcategory_id, *owned_ids),
+    )
+    db.commit()
+    return {"message": "Tagged", "updated": len(owned_ids)}

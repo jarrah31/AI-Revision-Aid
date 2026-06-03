@@ -146,3 +146,153 @@ def test_delete_past_paper_rejects_other_user(
         headers={"Authorization": f"Bearer {other_token}"},
     )
     assert r.status_code == 404
+
+
+def _make_category(db_conn, subject_id, name="Cells"):
+    cur = db_conn.execute(
+        "INSERT INTO categories (subject_id, name) VALUES (?, ?)", (subject_id, name)
+    )
+    db_conn.commit()
+    return cur.lastrowid
+
+
+def _make_subcategory(db_conn, category_id, name="Mitosis"):
+    cur = db_conn.execute(
+        "INSERT INTO subcategories (category_id, name) VALUES (?, ?)", (category_id, name)
+    )
+    db_conn.commit()
+    return cur.lastrowid
+
+
+def test_tag_questions_bulk(
+    client, db_conn, regular_user, user_headers, make_subject, make_batch, make_question
+):
+    user_id, _ = regular_user
+    subject_id = make_subject()
+    batch_id = make_batch(user_id, subject_id)
+    q1 = make_question(batch_id, user_id, subject_id)
+    q2 = make_question(batch_id, user_id, subject_id)
+    cat = _make_category(db_conn, subject_id)
+
+    r = client.post(
+        "/api/past-papers/tag",
+        headers=user_headers,
+        json={"question_ids": [q1, q2], "category_id": cat, "subcategory_id": None},
+    )
+    assert r.status_code == 200
+    for q in (q1, q2):
+        row = db_conn.execute(
+            "SELECT category_id FROM questions WHERE id=?", (q,)
+        ).fetchone()
+        assert row["category_id"] == cat
+
+
+def test_tag_clears_with_null(
+    client, db_conn, regular_user, user_headers, make_subject, make_batch, make_question
+):
+    user_id, _ = regular_user
+    subject_id = make_subject()
+    batch_id = make_batch(user_id, subject_id)
+    q = make_question(batch_id, user_id, subject_id)
+    cat = _make_category(db_conn, subject_id)
+    db_conn.execute("UPDATE questions SET category_id=? WHERE id=?", (cat, q))
+    db_conn.commit()
+
+    r = client.post(
+        "/api/past-papers/tag",
+        headers=user_headers,
+        json={"question_ids": [q], "category_id": None, "subcategory_id": None},
+    )
+    assert r.status_code == 200
+    row = db_conn.execute("SELECT category_id FROM questions WHERE id=?", (q,)).fetchone()
+    assert row["category_id"] is None
+
+
+def test_tag_rejects_cross_subject_category(
+    client, db_conn, regular_user, user_headers, make_subject, make_batch, make_question
+):
+    user_id, _ = regular_user
+    subject_a = make_subject("Biology")
+    subject_b = make_subject("Chemistry")
+    batch_id = make_batch(user_id, subject_a)
+    q = make_question(batch_id, user_id, subject_a)
+    foreign_cat = _make_category(db_conn, subject_b)  # belongs to a different subject
+
+    r = client.post(
+        "/api/past-papers/tag",
+        headers=user_headers,
+        json={"question_ids": [q], "category_id": foreign_cat, "subcategory_id": None},
+    )
+    assert r.status_code == 400
+    row = db_conn.execute("SELECT category_id FROM questions WHERE id=?", (q,)).fetchone()
+    assert row["category_id"] is None
+
+
+def test_tag_rejects_subcategory_not_under_category(
+    client, db_conn, regular_user, user_headers, make_subject, make_batch, make_question
+):
+    user_id, _ = regular_user
+    subject_id = make_subject()
+    batch_id = make_batch(user_id, subject_id)
+    q = make_question(batch_id, user_id, subject_id)
+    cat = _make_category(db_conn, subject_id)
+    other_cat = _make_category(db_conn, subject_id, name="Other")
+    foreign_sub = _make_subcategory(db_conn, other_cat)  # belongs to a different category
+
+    r = client.post(
+        "/api/past-papers/tag",
+        headers=user_headers,
+        json={"question_ids": [q], "category_id": cat, "subcategory_id": foreign_sub},
+    )
+    assert r.status_code == 400
+    row = db_conn.execute(
+        "SELECT category_id, subcategory_id FROM questions WHERE id=?", (q,)
+    ).fetchone()
+    assert row["category_id"] is None
+    assert row["subcategory_id"] is None
+
+
+def test_tag_with_valid_subcategory(
+    client, db_conn, regular_user, user_headers, make_subject, make_batch, make_question
+):
+    user_id, _ = regular_user
+    subject_id = make_subject()
+    batch_id = make_batch(user_id, subject_id)
+    q = make_question(batch_id, user_id, subject_id)
+    cat = _make_category(db_conn, subject_id)
+    sub = _make_subcategory(db_conn, cat)
+
+    r = client.post(
+        "/api/past-papers/tag",
+        headers=user_headers,
+        json={"question_ids": [q], "category_id": cat, "subcategory_id": sub},
+    )
+    assert r.status_code == 200
+    row = db_conn.execute(
+        "SELECT category_id, subcategory_id FROM questions WHERE id=?", (q,)
+    ).fetchone()
+    assert row["category_id"] == cat
+    assert row["subcategory_id"] == sub
+
+
+def test_tag_ignores_questions_not_owned(
+    client, db_conn, regular_user, second_user, user_headers,
+    make_subject, make_batch, make_question
+):
+    owner_id, _ = regular_user
+    other_id, _ = second_user
+    subject_id = make_subject()
+    batch_id = make_batch(other_id, subject_id)
+    foreign_q = make_question(batch_id, other_id, subject_id)  # owned by second_user
+    cat = _make_category(db_conn, subject_id)
+
+    r = client.post(
+        "/api/past-papers/tag",
+        headers=user_headers,
+        json={"question_ids": [foreign_q], "category_id": cat, "subcategory_id": None},
+    )
+    assert r.status_code == 200  # no error, but nothing changes
+    row = db_conn.execute(
+        "SELECT category_id FROM questions WHERE id=?", (foreign_q,)
+    ).fetchone()
+    assert row["category_id"] is None
