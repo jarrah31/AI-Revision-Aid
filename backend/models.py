@@ -48,6 +48,7 @@ class QuestionUpdate(BaseModel):
     answer_text: str | None = None
     question_type: str | None = None
     difficulty: int | None = Field(default=None, ge=1, le=3)
+    question_ref: str | None = None
 
 
 # Categories

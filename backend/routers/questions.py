@@ -18,6 +18,7 @@ def list_questions(
     category_id: int | None = None,
     subcategory_id: int | None = None,
     approved: int | None = None,
+    question_source: str | None = None,
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=200),
     user: dict = Depends(get_current_user),
@@ -41,6 +42,9 @@ def list_questions(
     if approved is not None:
         conditions.append("q.approved = ?")
         params.append(approved)
+    if question_source is not None:
+        conditions.append("q.question_source = ?")
+        params.append(question_source)
 
     where = " AND ".join(conditions)
     offset = (page - 1) * limit
@@ -193,6 +197,9 @@ def update_question(
     if req.difficulty is not None:
         updates.append("difficulty = ?")
         params.append(req.difficulty)
+    if req.question_ref is not None:
+        updates.append("question_ref = ?")
+        params.append(req.question_ref)
 
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")

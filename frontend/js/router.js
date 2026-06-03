@@ -19,6 +19,7 @@ const Router = {
         'ocr-review': '/static/pages/ocr_review.html',
         'quiz-review': '/static/pages/quiz_review.html',
         'multi-processing': '/static/pages/multi-processing.html',
+        'past-papers': '/static/pages/past-papers.html',
     },
 
     publicRoutes: ['login', 'signup'],

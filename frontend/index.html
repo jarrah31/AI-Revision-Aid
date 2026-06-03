@@ -31,6 +31,9 @@
                     <a href="#upload"
                        :class="['upload','processing','upload-history','review'].includes($store.app.route) ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
                        class="px-3 py-2 rounded-md text-sm transition">Upload</a>
+                    <a href="#past-papers"
+                       :class="$store.app.route==='past-papers' ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
+                       class="px-3 py-2 rounded-md text-sm transition">Past Papers</a>
                     <a href="#quiz"
                        :class="$store.app.route==='quiz' ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
                        class="px-3 py-2 rounded-md text-sm transition">Quiz</a>
@@ -102,6 +105,9 @@
                 <a href="#upload" @click="mobileOpen=false"
                    :class="['upload','processing','upload-history','review'].includes($store.app.route) ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
                    class="block px-3 py-2 rounded-md">Upload</a>
+                <a href="#past-papers" @click="mobileOpen=false"
+                   :class="$store.app.route==='past-papers' ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
+                   class="block px-3 py-2 rounded-md">Past Papers</a>
                 <a href="#quiz" @click="mobileOpen=false"
                    :class="$store.app.route==='quiz' ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
                    class="block px-3 py-2 rounded-md">Quiz</a>
