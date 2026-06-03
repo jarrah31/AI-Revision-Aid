@@ -32,3 +32,29 @@ def list_past_papers(
         (user["id"], subject_id),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+@router.delete("/{batch_id}")
+def delete_past_paper(
+    batch_id: int,
+    user: dict = Depends(get_current_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Delete one of the user's past-paper batches and all its questions/figures."""
+    batch = db.execute(
+        "SELECT id FROM upload_batches WHERE id = ? AND user_id = ? AND batch_type = 'past_paper'",
+        (batch_id, user["id"]),
+    ).fetchone()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Past paper not found")
+
+    delete_batch_images(batch_id)
+    delete_batch_pdf(batch_id)
+    # Mark scheme PDF, if any (delete_batch_pdf only removes the question paper)
+    ms_pdf = DATA_DIR / "pdfs" / f"batch_{batch_id}_ms.pdf"
+    if ms_pdf.exists():
+        ms_pdf.unlink()
+
+    db.execute("DELETE FROM upload_batches WHERE id = ?", (batch_id,))
+    db.commit()
+    return {"message": "Past paper deleted"}

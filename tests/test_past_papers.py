@@ -91,3 +91,58 @@ def test_list_past_papers(
     assert p["exam_board"] == "AQA"
     assert p["question_count"] == 2
     assert p["figure_count"] == 1
+
+
+def test_delete_past_paper_cascades(
+    client, db_conn, regular_user, user_headers, make_subject, make_batch, make_question
+):
+    user_id, _ = regular_user
+    subject_id = make_subject()
+    batch_id = make_batch(user_id, subject_id)
+    _make_past_paper(db_conn, batch_id)
+    q = make_question(batch_id, user_id, subject_id)
+    _set_source(db_conn, q, "past_paper")
+    _add_image(db_conn, batch_id, q)
+
+    r = client.delete(f"/api/past-papers/{batch_id}", headers=user_headers)
+    assert r.status_code == 200
+
+    assert db_conn.execute(
+        "SELECT COUNT(*) c FROM upload_batches WHERE id=?", (batch_id,)
+    ).fetchone()["c"] == 0
+    assert db_conn.execute(
+        "SELECT COUNT(*) c FROM questions WHERE batch_id=?", (batch_id,)
+    ).fetchone()["c"] == 0
+    assert db_conn.execute(
+        "SELECT COUNT(*) c FROM images WHERE batch_id=?", (batch_id,)
+    ).fetchone()["c"] == 0
+
+
+def test_delete_past_paper_rejects_ko_batch(
+    client, db_conn, regular_user, user_headers, make_subject, make_batch
+):
+    user_id, _ = regular_user
+    subject_id = make_subject()
+    ko_batch = make_batch(user_id, subject_id)  # knowledge_organiser
+
+    r = client.delete(f"/api/past-papers/{ko_batch}", headers=user_headers)
+    assert r.status_code == 404
+    assert db_conn.execute(
+        "SELECT COUNT(*) c FROM upload_batches WHERE id=?", (ko_batch,)
+    ).fetchone()["c"] == 1
+
+
+def test_delete_past_paper_rejects_other_user(
+    client, db_conn, regular_user, second_user, make_subject, make_batch
+):
+    owner_id, _ = regular_user
+    _, other_token = second_user
+    subject_id = make_subject()
+    batch_id = make_batch(owner_id, subject_id)
+    _make_past_paper(db_conn, batch_id)
+
+    r = client.delete(
+        f"/api/past-papers/{batch_id}",
+        headers={"Authorization": f"Bearer {other_token}"},
+    )
+    assert r.status_code == 404
