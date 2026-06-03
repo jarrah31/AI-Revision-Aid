@@ -333,6 +333,10 @@ def init_db():
         "ALTER TABLE quiz_answers ADD COLUMN is_skipped INTEGER NOT NULL DEFAULT 0",
         # Multi-mode quiz support
         "ALTER TABLE quiz_sessions ADD COLUMN quiz_modes_json TEXT DEFAULT NULL",
+        # Structured options for multiple-response ("tick N boxes") past-paper
+        # questions. JSON: {"select_count": int, "options":[{"text","is_correct"}]}.
+        # NULL for ordinary questions.
+        "ALTER TABLE questions ADD COLUMN options_json TEXT DEFAULT NULL",
     ]:
         try:
             db.execute(migration)
