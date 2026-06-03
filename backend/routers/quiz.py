@@ -14,6 +14,31 @@ from backend.services.mcq_service import ensure_mcq_options
 router = APIRouter()
 
 
+def _prepare_questions_for_client(questions: list[dict]) -> list[dict]:
+    """Replace raw options_json with a client-safe `multi_response` payload that
+    omits is_correct, so the browser never receives the correct set.
+
+    Idempotent: questions already carrying a `multi_response` key (e.g. loaded
+    from a previously-stripped questions_json on resume) are left untouched.
+    """
+    for q in questions:
+        if "multi_response" in q:
+            continue
+        raw = q.pop("options_json", None)
+        if raw:
+            try:
+                data = json.loads(raw)
+                q["multi_response"] = {
+                    "select_count": data.get("select_count"),
+                    "options": [{"text": o["text"]} for o in data.get("options", [])],
+                }
+            except Exception:
+                q["multi_response"] = None
+        else:
+            q["multi_response"] = None
+    return questions
+
+
 class QuizStartRequest(BaseModel):
     subject_id: int | None = None
     category_ids: list[int] | None = None      # multi-select
@@ -246,6 +271,9 @@ def start_quiz(
     first_cat_id = req.category_ids[0] if req.category_ids else None
     first_subcat_id = req.subcategory_ids[0] if req.subcategory_ids else None
 
+    # Strip is_correct flags before storing/returning to client
+    selected = _prepare_questions_for_client(selected)
+
     # Derive legacy quiz_mode string for backward compat
     if not req.modes or len(req.modes) == 0:
         legacy_mode = "mixed"
@@ -347,6 +375,7 @@ def submit_answer(
     is_correct = None
     ai_feedback = None
     quality = req.quality_rating
+    correct_options = None
 
     if req.quiz_format == "flashcard":
         # Self-rated: quality comes from the request
@@ -386,6 +415,23 @@ def submit_answer(
             is_correct = 1 if (req.student_answer or "").lower().strip() == question["answer_text"].lower().strip() else 0
             quality = 5 if is_correct else 1
             ai_feedback = "Auto-judged (AI unavailable)"
+
+    elif req.quiz_format == "multi_response":
+        raw = question["options_json"]
+        correct_set: set[str] = set()
+        if raw:
+            try:
+                data = json.loads(raw)
+                correct_set = {o["text"] for o in data.get("options", []) if o.get("is_correct")}
+            except Exception:
+                correct_set = set()
+        try:
+            chosen = set(json.loads(req.student_answer or "[]"))
+        except Exception:
+            chosen = set()
+        is_correct = 1 if (correct_set and chosen == correct_set) else 0
+        quality = 4 if is_correct else 1
+        correct_options = sorted(correct_set)
 
     # Record answer
     db.execute(
@@ -438,6 +484,7 @@ def submit_answer(
         "correct_answer": question["answer_text"],
         "feedback": ai_feedback,
         "quality": quality,
+        "correct_options": correct_options,
     }
 
 
@@ -533,6 +580,7 @@ def resume_quiz(
 
     session_dict = dict(session)
     questions = json.loads(session_dict["questions_json"] or "[]")
+    questions = _prepare_questions_for_client(questions)
     question_sources = json.loads(session_dict["question_sources_json"] or "[]")
 
     quiz_modes = json.loads(session_dict["quiz_modes_json"] or "null")

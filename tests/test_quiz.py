@@ -1,5 +1,6 @@
 """Tests for /api/quiz endpoints."""
 import pytest
+import json as _json
 from datetime import date
 
 
@@ -363,3 +364,128 @@ def test_incorrect_answer_resets_srs(
     ).fetchone()
     assert row["repetitions"] == 0
     assert row["interval_days"] == 1
+
+
+# ── Multi-response questions ───────────────────────────────────────────────────
+
+def _make_session_with_question(db_conn, uid, qid):
+    cur = db_conn.execute(
+        """INSERT INTO quiz_sessions
+           (user_id, quiz_mode, total_questions, current_index)
+           VALUES (?, 'mixed', 1, 0)""",
+        (uid,),
+    )
+    db_conn.commit()
+    return cur.lastrowid
+
+
+def _add_multi_response(db_conn, qid, select_count, options):
+    db_conn.execute(
+        "UPDATE questions SET options_json = ? WHERE id = ?",
+        (_json.dumps({"select_count": select_count, "options": options}), qid),
+    )
+    db_conn.commit()
+
+
+def test_multi_response_exact_match_is_correct(
+    client, user_headers, regular_user, make_subject, make_batch, make_question, db_conn
+):
+    uid, _ = regular_user
+    sid = make_subject()
+    bid = make_batch(uid, sid)
+    qid = make_question(bid, uid, sid)
+    _add_multi_response(db_conn, qid, 2, [
+        {"text": "a", "is_correct": True}, {"text": "b", "is_correct": True},
+        {"text": "c", "is_correct": False},
+    ])
+    sess = _make_session_with_question(db_conn, uid, qid)
+
+    r = client.post(f"/api/quiz/{sess}/answer", headers=user_headers, json={
+        "question_id": qid, "quiz_format": "multi_response",
+        "student_answer": _json.dumps(["a", "b"]),
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["is_correct"] is True
+    assert sorted(body["correct_options"]) == ["a", "b"]
+
+
+def test_multi_response_subset_is_incorrect(
+    client, user_headers, regular_user, make_subject, make_batch, make_question, db_conn
+):
+    uid, _ = regular_user
+    sid = make_subject()
+    bid = make_batch(uid, sid)
+    qid = make_question(bid, uid, sid)
+    _add_multi_response(db_conn, qid, 2, [
+        {"text": "a", "is_correct": True}, {"text": "b", "is_correct": True},
+        {"text": "c", "is_correct": False},
+    ])
+    sess = _make_session_with_question(db_conn, uid, qid)
+
+    r = client.post(f"/api/quiz/{sess}/answer", headers=user_headers, json={
+        "question_id": qid, "quiz_format": "multi_response",
+        "student_answer": _json.dumps(["a"]),
+    })
+    assert r.json()["is_correct"] is False
+
+
+def test_multi_response_superset_is_incorrect(
+    client, user_headers, regular_user, make_subject, make_batch, make_question, db_conn
+):
+    uid, _ = regular_user
+    sid = make_subject()
+    bid = make_batch(uid, sid)
+    qid = make_question(bid, uid, sid)
+    _add_multi_response(db_conn, qid, 2, [
+        {"text": "a", "is_correct": True}, {"text": "b", "is_correct": True},
+        {"text": "c", "is_correct": False},
+    ])
+    sess = _make_session_with_question(db_conn, uid, qid)
+
+    r = client.post(f"/api/quiz/{sess}/answer", headers=user_headers, json={
+        "question_id": qid, "quiz_format": "multi_response",
+        "student_answer": _json.dumps(["a", "b", "c"]),
+    })
+    assert r.json()["is_correct"] is False
+
+
+def test_quiz_start_strips_option_correctness(
+    client, user_headers, regular_user, make_subject, make_batch, make_question, db_conn
+):
+    uid, _ = regular_user
+    sid = make_subject()
+    bid = make_batch(uid, sid)
+    qid = make_question(bid, uid, sid)
+    _add_multi_response(db_conn, qid, 2, [
+        {"text": "a", "is_correct": True}, {"text": "b", "is_correct": False},
+    ])
+
+    r = client.post("/api/quiz/start", json={"subject_id": sid}, headers=user_headers)
+    assert r.status_code == 200
+    q = next(x for x in r.json()["questions"] if x["id"] == qid)
+    assert q["multi_response"]["select_count"] == 2
+    assert all("is_correct" not in o for o in q["multi_response"]["options"])
+    assert "options_json" not in q
+
+
+def test_resume_preserves_multi_response(
+    client, user_headers, regular_user, make_subject, make_batch, make_question, db_conn
+):
+    uid, _ = regular_user
+    sid = make_subject()
+    bid = make_batch(uid, sid)
+    qid = make_question(bid, uid, sid)
+    _add_multi_response(db_conn, qid, 2, [
+        {"text": "a", "is_correct": True}, {"text": "b", "is_correct": False},
+    ])
+    # Start a quiz so questions_json is populated (already-stripped) for this session
+    start = client.post("/api/quiz/start", json={"subject_id": sid}, headers=user_headers).json()
+    sess = start["session_id"]
+
+    r = client.get(f"/api/quiz/{sess}/resume", headers=user_headers)
+    assert r.status_code == 200
+    q = next(x for x in r.json()["questions"] if x["id"] == qid)
+    assert q["multi_response"] is not None
+    assert q["multi_response"]["select_count"] == 2
+    assert all("is_correct" not in o for o in q["multi_response"]["options"])
