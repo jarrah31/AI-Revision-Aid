@@ -477,3 +477,48 @@ def test_attach_image_rejects_other_users_image(
     assert db_conn.execute(
         "SELECT image_id FROM questions WHERE id=?", (my_q,)
     ).fetchone()["image_id"] is None
+
+
+def test_detect_multi_response_endpoint_updates_questions(
+    client, user_headers, regular_user, make_subject, make_batch, make_question, db_conn, monkeypatch
+):
+    import backend.services.multi_response_service as mrs
+    uid, _ = regular_user
+    sid = make_subject()
+    bid = make_batch(uid, sid)
+    q1 = make_question(bid, uid, sid, question_text="Which two? a b c", answer_text="a; b")
+    db_conn.execute("UPDATE questions SET question_source='past_paper' WHERE id=?", (q1,))
+    db_conn.commit()
+
+    monkeypatch.setattr(
+        mrs, "detect_multiple_response_batch",
+        lambda questions, subject: (
+            [{"select_count": 2, "stem": "Which two?",
+              "options": [{"text": "a", "is_correct": True},
+                          {"text": "b", "is_correct": True},
+                          {"text": "c", "is_correct": False}]}],
+            {"input_tokens": 1, "output_tokens": 1, "cost_usd": 0.0},
+        ),
+    )
+
+    r = client.post(f"/api/past-papers/{bid}/detect-multi-response", headers=user_headers)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["updated"] == 1
+    assert body["scanned"] == 1
+
+
+def test_detect_multi_response_rejects_other_users_batch(
+    client, regular_user, second_user, make_subject, make_batch, make_question, db_conn
+):
+    owner_id, _ = second_user
+    sid = make_subject()
+    bid = make_batch(owner_id, sid)
+    q1 = make_question(bid, owner_id, sid)
+    db_conn.execute("UPDATE questions SET question_source='past_paper' WHERE id=?", (q1,))
+    db_conn.commit()
+
+    _, token1 = regular_user
+    r = client.post(f"/api/past-papers/{bid}/detect-multi-response",
+                    headers={"Authorization": f"Bearer {token1}"})
+    assert r.status_code == 404

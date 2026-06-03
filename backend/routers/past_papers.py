@@ -9,6 +9,7 @@ from PIL import Image
 from backend.auth import get_current_user
 from backend.database import get_db
 from backend.services.image_service import delete_batch_images, delete_batch_pdf
+from backend.services.multi_response_service import detect_and_store_multi_response
 from backend.services.pdf_processor import crop_section_to_bytes
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
@@ -209,3 +210,32 @@ def set_question_image(
     )
     db.commit()
     return {"message": "Image updated", "image_id": req.image_id}
+
+
+@router.post("/{batch_id}/detect-multi-response")
+def detect_multi_response(
+    batch_id: int,
+    user: dict = Depends(get_current_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Re-scan an existing past-paper batch for 'tick N boxes' multiple-response
+    questions and store their structured form. Returns counts."""
+    batch = db.execute(
+        "SELECT b.id, s.name as subject_name FROM upload_batches b "
+        "LEFT JOIN subjects s ON s.id = b.subject_id "
+        "WHERE b.id = ? AND b.user_id = ?",
+        (batch_id, user["id"]),
+    ).fetchone()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Past paper not found")
+
+    scanned = db.execute(
+        "SELECT COUNT(*) AS c FROM questions "
+        "WHERE batch_id = ? AND user_id = ? AND question_source = 'past_paper'",
+        (batch_id, user["id"]),
+    ).fetchone()["c"]
+
+    updated = detect_and_store_multi_response(
+        batch_id, batch["subject_name"] or "General", user["id"], db
+    )
+    return {"updated": updated, "scanned": scanned}
