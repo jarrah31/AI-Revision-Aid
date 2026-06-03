@@ -35,6 +35,7 @@ from backend.routers.dashboard import router as dashboard_router
 from backend.routers.costs import router as costs_router
 from backend.routers.categories import router as categories_router
 from backend.routers.subcategories import router as subcategories_router
+from backend.routers.past_papers import router as past_papers_router
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(subjects_router, prefix="/api/subjects", tags=["subjects"])
@@ -47,6 +48,7 @@ app.include_router(dashboard_router, prefix="/api/dashboard", tags=["dashboard"]
 app.include_router(costs_router, prefix="/api/costs", tags=["costs"])
 app.include_router(categories_router, prefix="/api/categories", tags=["categories"])
 app.include_router(subcategories_router, prefix="/api/subcategories", tags=["subcategories"])
+app.include_router(past_papers_router, prefix="/api/past-papers", tags=["past-papers"])
 
 @app.get("/api/version")
 async def get_version():

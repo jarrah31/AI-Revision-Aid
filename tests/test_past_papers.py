@@ -64,3 +64,30 @@ def test_update_question_persists_question_ref(
         "SELECT question_ref FROM questions WHERE id=?", (q_id,)
     ).fetchone()
     assert row["question_ref"] == "1a"
+
+
+def test_list_past_papers(
+    client, db_conn, regular_user, user_headers, make_subject, make_batch, make_question
+):
+    user_id, _ = regular_user
+    subject_id = make_subject()
+
+    pp_batch = make_batch(user_id, subject_id)
+    _make_past_paper(db_conn, pp_batch)
+    q1 = make_question(pp_batch, user_id, subject_id)
+    q2 = make_question(pp_batch, user_id, subject_id)
+    _set_source(db_conn, q1, "past_paper")
+    _set_source(db_conn, q2, "past_paper")
+    _add_image(db_conn, pp_batch, q1)  # one figure
+
+    ko_batch = make_batch(user_id, subject_id)  # knowledge_organiser — must be excluded
+
+    r = client.get(f"/api/past-papers?subject_id={subject_id}", headers=user_headers)
+    assert r.status_code == 200
+    papers = r.json()
+    assert len(papers) == 1
+    p = papers[0]
+    assert p["id"] == pp_batch
+    assert p["exam_board"] == "AQA"
+    assert p["question_count"] == 2
+    assert p["figure_count"] == 1
