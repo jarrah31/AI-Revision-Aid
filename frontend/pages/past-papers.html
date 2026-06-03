@@ -17,23 +17,23 @@ Alpine.data('pastPapersPage', () => ({
 
     async init() {
         this.loading = true;
-        this.subjects = await API.get('/api/subjects');
+        this.subjects = await API.get('/subjects');
         if (!this.subjects.length) { this.loading = false; return; }
         // Default to the first subject that has past papers; fall back to subjects[0]
         for (const s of this.subjects) {
-            const papers = await API.get(`/api/past-papers?subject_id=${s.id}`);
+            const papers = await API.get(`/past-papers?subject_id=${s.id}`);
             if (papers.length) { this.subjectId = s.id; this.papers = papers; break; }
         }
         if (!this.subjectId) this.subjectId = this.subjects[0].id;
-        this.categories = await API.get(`/api/categories?subject_id=${this.subjectId}`);
+        this.categories = await API.get(`/categories?subject_id=${this.subjectId}`);
         this.loading = false;
     },
 
     async loadSubject() {
         this.loading = true;
         this.expanded = {}; this.questions = {}; this.selected = {};
-        this.papers = await API.get(`/api/past-papers?subject_id=${this.subjectId}`);
-        this.categories = await API.get(`/api/categories?subject_id=${this.subjectId}`);
+        this.papers = await API.get(`/past-papers?subject_id=${this.subjectId}`);
+        this.categories = await API.get(`/categories?subject_id=${this.subjectId}`);
         this.loading = false;
     },
 
@@ -44,20 +44,20 @@ Alpine.data('pastPapersPage', () => ({
     async toggle(batchId) {
         this.expanded[batchId] = !this.expanded[batchId];
         if (this.expanded[batchId] && !this.questions[batchId]) {
-            const res = await API.get(`/api/questions?batch_id=${batchId}&question_source=past_paper&limit=200`);
+            const res = await API.get(`/questions?batch_id=${batchId}&question_source=past_paper&limit=200`);
             this.questions[batchId] = res.questions;
         }
     },
 
     async deletePaper(p) {
         if (!confirm(`Delete "${this.paperLabel(p)}" and all its questions? This cannot be undone.`)) return;
-        await API.del(`/api/past-papers/${p.id}`);
+        await API.del(`/past-papers/${p.id}`);
         await this.loadSubject();
     },
 
     async deleteQuestion(batchId, q) {
         if (!confirm('Delete this question?')) return;
-        await API.del(`/api/questions/${q.id}`);
+        await API.del(`/questions/${q.id}`);
         this.questions[batchId] = this.questions[batchId].filter(x => x.id !== q.id);
     },
 
@@ -70,21 +70,21 @@ Alpine.data('pastPapersPage', () => ({
         };
     },
     async saveEdit(batchId, q) {
-        await API.put(`/api/questions/${q.id}`, this.editForm);
+        await API.put(`/questions/${q.id}`, this.editForm);
         Object.assign(q, this.editForm);
         this.editing = null;
     },
 
     async loadSubcats(categoryId) {
         if (categoryId && !this.subcategories[categoryId]) {
-            this.subcategories[categoryId] = await API.get(`/api/subcategories?category_id=${categoryId}`);
+            this.subcategories[categoryId] = await API.get(`/subcategories?category_id=${categoryId}`);
         }
     },
 
     async tagOne(q, categoryId, subcategoryId) {
         const catId = Number(categoryId) || null;
         const subId = Number(subcategoryId) || null;
-        await API.post('/api/past-papers/tag', {
+        await API.post('/past-papers/tag', {
             question_ids: [q.id],
             category_id: catId,
             subcategory_id: subId,
@@ -106,7 +106,7 @@ Alpine.data('pastPapersPage', () => ({
         if (!ids.length) return;
         const catId = Number(this.bulkCategoryId) || null;
         const subId = Number(this.bulkSubcategoryId) || null;
-        await API.post('/api/past-papers/tag', {
+        await API.post('/past-papers/tag', {
             question_ids: ids,
             category_id: catId,
             subcategory_id: subId,
@@ -152,7 +152,7 @@ Alpine.data('pastPapersPage', () => ({
     endMove() { this.recrop.dragging = false; this.recrop.resizing = false; },
     async saveRecrop() {
         const R = this.recrop.rect, q = this.recrop.q;
-        const res = await API.post(`/api/past-papers/questions/${q.id}/recrop`, {
+        const res = await API.post(`/past-papers/questions/${q.id}/recrop`, {
             bbox_x_pct: R.x, bbox_y_pct: R.y, bbox_w_pct: R.w, bbox_h_pct: R.h,
         });
         q.image_filename = res.filename;
@@ -160,7 +160,7 @@ Alpine.data('pastPapersPage', () => ({
         this.recrop.open = false;
     },
     async detachImage(q) {
-        await API.put(`/api/past-papers/questions/${q.id}/image`, { image_id: null });
+        await API.put(`/past-papers/questions/${q.id}/image`, { image_id: null });
         q.image_filename = null; q.image_id = null;
     },
 }));
@@ -234,12 +234,14 @@ Alpine.data('pastPapersPage', () => ({
                                         <div class="whitespace-pre-wrap text-sm text-gray-700"
                                              x-text="q.answer_text || '(no answer)'"></div>
                                     </details>
-                                    <div x-show="q.image_filename" class="relative inline-block mt-2">
+                                    <template x-if="q.image_filename">
+                                    <div class="relative inline-block mt-2">
                                         <img :src="`/images/${q.image_filename}`" class="max-h-40 rounded border" alt="figure">
                                         <button @click="detachImage(q)"
                                                 class="absolute top-1 right-1 bg-white/90 text-red-600 rounded-full w-6 h-6 text-xs"
                                                 title="Detach figure">✕</button>
                                     </div>
+                                    </template>
                                     <button @click="openRecrop(p.id, q)" class="text-xs text-indigo-600 block mt-1"
                                             x-text="q.image_filename ? 'Re-crop figure' : 'Set figure'"></button>
                                     <div class="mt-2 flex flex-wrap items-center gap-2">
