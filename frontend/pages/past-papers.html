@@ -1,3 +1,4 @@
+<style>[x-cloak]{display:none}</style>
 <script>
 Alpine.data('pastPapersPage', () => ({
     subjects: [],
@@ -111,6 +112,51 @@ Alpine.data('pastPapersPage', () => ({
         }});
         ids.forEach(id => this.selected[id] = false);
     },
+
+    // Re-crop modal
+    recrop: { open: false, q: null, batchId: null, pageImg: '', rect: null, dragging: false, resizing: false, start: null },
+
+    openRecrop(batchId, q) {
+        this.recrop = {
+            open: true, q, batchId,
+            pageImg: `/images/batch_${q.batch_id}/page_${q.page_number}_full.png`,
+            rect: { x: 20, y: 20, w: 40, h: 30 },
+            dragging: false, resizing: false, start: null,
+        };
+    },
+    _pct(e, el) {
+        const r = el.getBoundingClientRect();
+        return { x: ((e.clientX - r.left) / r.width) * 100, y: ((e.clientY - r.top) / r.height) * 100 };
+    },
+    startMove(e, el) { this.recrop.dragging = true; this.recrop.start = this._pct(e, el); },
+    startResize(e, el) { e.stopPropagation(); this.recrop.resizing = true; this.recrop.start = this._pct(e, el); },
+    onMove(e, el) {
+        if (!this.recrop.dragging && !this.recrop.resizing) return;
+        const p = this._pct(e, el), s = this.recrop.start, R = this.recrop.rect;
+        const dx = p.x - s.x, dy = p.y - s.y;
+        if (this.recrop.dragging) {
+            R.x = Math.max(0, Math.min(100 - R.w, R.x + dx));
+            R.y = Math.max(0, Math.min(100 - R.h, R.y + dy));
+        } else {
+            R.w = Math.max(5, Math.min(100 - R.x, R.w + dx));
+            R.h = Math.max(5, Math.min(100 - R.y, R.h + dy));
+        }
+        this.recrop.start = p;
+    },
+    endMove() { this.recrop.dragging = false; this.recrop.resizing = false; },
+    async saveRecrop() {
+        const R = this.recrop.rect, q = this.recrop.q;
+        const res = await API.post(`/api/past-papers/questions/${q.id}/recrop`, {
+            bbox_x_pct: R.x, bbox_y_pct: R.y, bbox_w_pct: R.w, bbox_h_pct: R.h,
+        });
+        q.image_filename = res.filename;
+        q.image_id = res.image_id;
+        this.recrop.open = false;
+    },
+    async detachImage(q) {
+        await API.put(`/api/past-papers/questions/${q.id}/image`, { image_id: null });
+        q.image_filename = null; q.image_id = null;
+    },
 }));
 </script>
 
@@ -182,8 +228,14 @@ Alpine.data('pastPapersPage', () => ({
                                         <div class="whitespace-pre-wrap text-sm text-gray-700"
                                              x-text="q.answer_text || '(no answer)'"></div>
                                     </details>
-                                    <img x-show="q.image_filename" :src="`/images/${q.image_filename}`"
-                                         class="mt-2 max-h-40 rounded border" alt="figure">
+                                    <div x-show="q.image_filename" class="relative inline-block mt-2">
+                                        <img :src="`/images/${q.image_filename}`" class="max-h-40 rounded border" alt="figure">
+                                        <button @click="detachImage(q)"
+                                                class="absolute top-1 right-1 bg-white/90 text-red-600 rounded-full w-6 h-6 text-xs"
+                                                title="Detach figure">✕</button>
+                                    </div>
+                                    <button @click="openRecrop(p.id, q)" class="text-xs text-indigo-600 block mt-1"
+                                            x-text="q.image_filename ? 'Re-crop figure' : 'Set figure'"></button>
                                     <div class="mt-2 flex flex-wrap items-center gap-2">
                                         <select class="border rounded px-1 py-0.5 text-xs"
                                                 @change="loadSubcats($event.target.value); tagOne(q, $event.target.value, '')">
@@ -219,4 +271,27 @@ Alpine.data('pastPapersPage', () => ({
             </div>
         </div>
     </template>
+
+    <!-- Re-crop modal -->
+    <div x-show="recrop.open" x-cloak
+         class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+        <div class="bg-white rounded-lg p-4 max-w-3xl w-full">
+            <h3 class="font-semibold mb-2">Re-crop figure — drag the box, drag the corner to resize</h3>
+            <div class="relative inline-block select-none"
+                 @pointermove="onMove($event, $refs.pageImgEl)" @pointerup="endMove()" @pointerleave="endMove()">
+                <img x-ref="pageImgEl" :src="recrop.pageImg" class="max-h-[70vh] block" alt="page"
+                     @error="recrop.open = false; alert('Original page image unavailable.')">
+                <div x-show="recrop.rect" class="absolute border-2 border-indigo-500 bg-indigo-500/20 cursor-move"
+                     :style="`left:${recrop.rect.x}%;top:${recrop.rect.y}%;width:${recrop.rect.w}%;height:${recrop.rect.h}%`"
+                     @pointerdown="startMove($event, $refs.pageImgEl)">
+                    <div class="absolute bottom-0 right-0 w-3 h-3 bg-indigo-600 cursor-se-resize"
+                         @pointerdown="startResize($event, $refs.pageImgEl)"></div>
+                </div>
+            </div>
+            <div class="mt-3 flex gap-2 justify-end">
+                <button @click="recrop.open = false" class="px-3 py-1 rounded border">Cancel</button>
+                <button @click="saveRecrop()" class="px-3 py-1 rounded bg-indigo-600 text-white">Save crop</button>
+            </div>
+        </div>
+    </div>
 </div>
