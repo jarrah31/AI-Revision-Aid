@@ -1,3 +1,6 @@
+import backend.routers.past_papers as past_papers
+
+
 def _make_past_paper(db_conn, batch_id, board="AQA", year=2023, paper="Paper 1", tier="Foundation"):
     db_conn.execute(
         """UPDATE upload_batches
@@ -24,6 +27,14 @@ def _add_image(db_conn, batch_id, question_id, filename="batch_x/page_1_img_0.pn
     db_conn.execute("UPDATE questions SET image_id=? WHERE id=?", (image_id, question_id))
     db_conn.commit()
     return image_id
+
+
+def _write_full_page(data_dir, batch_id, page_number=1, size=(400, 300)):
+    """Create a real full-page PNG on disk where the recrop endpoint expects it."""
+    from PIL import Image
+    d = data_dir / "images" / f"batch_{batch_id}"
+    d.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", size, (255, 255, 255)).save(d / f"page_{page_number}_full.png")
 
 
 def test_list_questions_filters_by_source(
@@ -296,3 +307,91 @@ def test_tag_ignores_questions_not_owned(
         "SELECT category_id FROM questions WHERE id=?", (foreign_q,)
     ).fetchone()
     assert row["category_id"] is None
+
+
+def test_recrop_creates_new_image_and_links(
+    client, db_conn, regular_user, user_headers, tmp_path, monkeypatch,
+    make_subject, make_batch, make_question
+):
+    monkeypatch.setattr(past_papers, "DATA_DIR", tmp_path / "data")
+    user_id, _ = regular_user
+    subject_id = make_subject()
+    batch_id = make_batch(user_id, subject_id)
+    q = make_question(batch_id, user_id, subject_id, page_number=1)
+    _write_full_page(tmp_path / "data", batch_id, page_number=1)
+
+    r = client.post(
+        f"/api/past-papers/questions/{q}/recrop",
+        headers=user_headers,
+        json={"bbox_x_pct": 10, "bbox_y_pct": 10, "bbox_w_pct": 40, "bbox_h_pct": 30},
+    )
+    assert r.status_code == 200
+    new_image_id = r.json()["image_id"]
+    row = db_conn.execute("SELECT image_id FROM questions WHERE id=?", (q,)).fetchone()
+    assert row["image_id"] == new_image_id
+    img = db_conn.execute("SELECT batch_id FROM images WHERE id=?", (new_image_id,)).fetchone()
+    assert img["batch_id"] == batch_id
+
+
+def test_recrop_does_not_mutate_shared_image(
+    client, db_conn, regular_user, user_headers, tmp_path, monkeypatch,
+    make_subject, make_batch, make_question
+):
+    """Re-cropping one question must not change the figure of a sibling sharing the image."""
+    monkeypatch.setattr(past_papers, "DATA_DIR", tmp_path / "data")
+    user_id, _ = regular_user
+    subject_id = make_subject()
+    batch_id = make_batch(user_id, subject_id)
+    q1 = make_question(batch_id, user_id, subject_id, page_number=1)
+    q2 = make_question(batch_id, user_id, subject_id, page_number=1)
+    shared_image = _add_image(db_conn, batch_id, q1)
+    db_conn.execute("UPDATE questions SET image_id=? WHERE id=?", (shared_image, q2))
+    db_conn.commit()
+    _write_full_page(tmp_path / "data", batch_id, page_number=1)
+
+    r = client.post(
+        f"/api/past-papers/questions/{q1}/recrop",
+        headers=user_headers,
+        json={"bbox_x_pct": 0, "bbox_y_pct": 0, "bbox_w_pct": 50, "bbox_h_pct": 50},
+    )
+    assert r.status_code == 200
+    new_id = r.json()["image_id"]
+    assert new_id != shared_image
+    assert db_conn.execute("SELECT image_id FROM questions WHERE id=?", (q2,)).fetchone()["image_id"] == shared_image
+
+
+def test_recrop_404_when_full_page_missing(
+    client, db_conn, regular_user, user_headers, tmp_path, monkeypatch,
+    make_subject, make_batch, make_question
+):
+    monkeypatch.setattr(past_papers, "DATA_DIR", tmp_path / "data")
+    user_id, _ = regular_user
+    subject_id = make_subject()
+    batch_id = make_batch(user_id, subject_id)
+    q = make_question(batch_id, user_id, subject_id, page_number=1)
+
+    r = client.post(
+        f"/api/past-papers/questions/{q}/recrop",
+        headers=user_headers,
+        json={"bbox_x_pct": 10, "bbox_y_pct": 10, "bbox_w_pct": 40, "bbox_h_pct": 30},
+    )
+    assert r.status_code == 404
+
+
+def test_recrop_400_on_invalid_bbox(
+    client, db_conn, regular_user, user_headers, tmp_path, monkeypatch,
+    make_subject, make_batch, make_question
+):
+    monkeypatch.setattr(past_papers, "DATA_DIR", tmp_path / "data")
+    user_id, _ = regular_user
+    subject_id = make_subject()
+    batch_id = make_batch(user_id, subject_id)
+    q = make_question(batch_id, user_id, subject_id, page_number=1)
+    _write_full_page(tmp_path / "data", batch_id, page_number=1)
+
+    r = client.post(
+        f"/api/past-papers/questions/{q}/recrop",
+        headers=user_headers,
+        json={"bbox_x_pct": 10, "bbox_y_pct": 10, "bbox_w_pct": 0, "bbox_h_pct": 30},
+    )
+    assert r.status_code == 400

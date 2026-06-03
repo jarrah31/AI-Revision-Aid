@@ -1,12 +1,15 @@
+import io
 import sqlite3
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+from PIL import Image
 
 from backend.auth import get_current_user
 from backend.database import get_db
 from backend.services.image_service import delete_batch_images, delete_batch_pdf
+from backend.services.pdf_processor import crop_section_to_bytes
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
 
@@ -111,3 +114,63 @@ def tag_questions(
     )
     db.commit()
     return {"message": "Tagged", "updated": len(owned_ids)}
+
+
+class RecropRequest(BaseModel):
+    bbox_x_pct: float
+    bbox_y_pct: float
+    bbox_w_pct: float
+    bbox_h_pct: float
+
+
+@router.post("/questions/{question_id}/recrop")
+def recrop_figure(
+    question_id: int,
+    req: RecropRequest,
+    user: dict = Depends(get_current_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Re-crop a question's figure from the saved full-page image. Creates a NEW image row
+    (never mutates a shared one) and repoints this question's image_id at it."""
+    q = db.execute(
+        "SELECT id, batch_id, page_number FROM questions WHERE id = ? AND user_id = ?",
+        (question_id, user["id"]),
+    ).fetchone()
+    if not q:
+        raise HTTPException(status_code=404, detail="Question not found")
+
+    if not (0 <= req.bbox_x_pct <= 100 and 0 <= req.bbox_y_pct <= 100
+            and req.bbox_w_pct > 0 and req.bbox_h_pct > 0
+            and req.bbox_x_pct + req.bbox_w_pct <= 100.5
+            and req.bbox_y_pct + req.bbox_h_pct <= 100.5):
+        raise HTTPException(status_code=400, detail="Invalid bounding box")
+
+    full_page = DATA_DIR / "images" / f"batch_{q['batch_id']}" / f"page_{q['page_number']}_full.png"
+    if not full_page.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Original page image unavailable; re-upload the paper to enable re-cropping",
+        )
+
+    png_bytes = full_page.read_bytes()
+    cropped = crop_section_to_bytes(
+        png_bytes, req.bbox_x_pct, req.bbox_y_pct, req.bbox_w_pct, req.bbox_h_pct
+    )
+    width, height = Image.open(io.BytesIO(cropped)).size
+
+    rel_name = f"batch_{q['batch_id']}/page_{q['page_number']}_recrop_q{question_id}.png"
+    out_path = DATA_DIR / "images" / rel_name
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_bytes(cropped)
+
+    cur = db.execute(
+        """INSERT INTO images (batch_id, page_number, filename, description,
+           crop_x, crop_y, crop_w, crop_h, width, height)
+           VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?)""",
+        (q["batch_id"], q["page_number"], rel_name,
+         req.bbox_x_pct, req.bbox_y_pct, req.bbox_w_pct, req.bbox_h_pct, width, height),
+    )
+    new_image_id = cur.lastrowid
+    db.execute("UPDATE questions SET image_id = ? WHERE id = ?", (new_image_id, question_id))
+    db.commit()
+    return {"image_id": new_image_id, "filename": rel_name}
