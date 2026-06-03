@@ -174,3 +174,38 @@ def recrop_figure(
     db.execute("UPDATE questions SET image_id = ? WHERE id = ?", (new_image_id, question_id))
     db.commit()
     return {"image_id": new_image_id, "filename": rel_name}
+
+
+class SetImageRequest(BaseModel):
+    image_id: int | None = None
+
+
+@router.put("/questions/{question_id}/image")
+def set_question_image(
+    question_id: int,
+    req: SetImageRequest,
+    user: dict = Depends(get_current_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Attach an existing same-batch figure to a question, or detach (image_id=null)."""
+    q = db.execute(
+        "SELECT id, batch_id FROM questions WHERE id = ? AND user_id = ?",
+        (question_id, user["id"]),
+    ).fetchone()
+    if not q:
+        raise HTTPException(status_code=404, detail="Question not found")
+
+    if req.image_id is not None:
+        img = db.execute(
+            "SELECT batch_id FROM images WHERE id = ?", (req.image_id,)
+        ).fetchone()
+        if not img:
+            raise HTTPException(status_code=404, detail="Image not found")
+        if img["batch_id"] != q["batch_id"]:
+            raise HTTPException(status_code=400, detail="Image belongs to a different paper")
+
+    db.execute(
+        "UPDATE questions SET image_id = ? WHERE id = ?", (req.image_id, question_id)
+    )
+    db.commit()
+    return {"message": "Image updated", "image_id": req.image_id}
