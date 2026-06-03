@@ -16,11 +16,17 @@ Alpine.data('pastPapersPage', () => ({
     editForm: {},
 
     async init() {
+        this.loading = true;
         this.subjects = await API.get('/api/subjects');
-        if (this.subjects.length) {
-            this.subjectId = this.subjects[0].id;
-            await this.loadSubject();
+        if (!this.subjects.length) { this.loading = false; return; }
+        // Default to the first subject that has past papers; fall back to subjects[0]
+        for (const s of this.subjects) {
+            const papers = await API.get(`/api/past-papers?subject_id=${s.id}`);
+            if (papers.length) { this.subjectId = s.id; this.papers = papers; break; }
         }
+        if (!this.subjectId) this.subjectId = this.subjects[0].id;
+        this.categories = await API.get(`/api/categories?subject_id=${this.subjectId}`);
+        this.loading = false;
     },
 
     async loadSubject() {
