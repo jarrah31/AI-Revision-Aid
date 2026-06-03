@@ -1,0 +1,222 @@
+<script>
+Alpine.data('pastPapersPage', () => ({
+    subjects: [],
+    subjectId: null,
+    papers: [],
+    loading: false,
+    expanded: {},
+    questions: {},
+    categories: [],
+    subcategories: {},
+    selected: {},
+    bulkCategoryId: '',
+    bulkSubcategoryId: '',
+    editing: null,
+    editForm: {},
+
+    async init() {
+        this.subjects = await API.get('/api/subjects');
+        if (this.subjects.length) {
+            this.subjectId = this.subjects[0].id;
+            await this.loadSubject();
+        }
+    },
+
+    async loadSubject() {
+        this.loading = true;
+        this.expanded = {}; this.questions = {}; this.selected = {};
+        this.papers = await API.get(`/api/past-papers?subject_id=${this.subjectId}`);
+        this.categories = await API.get(`/api/categories?subject_id=${this.subjectId}`);
+        this.loading = false;
+    },
+
+    paperLabel(p) {
+        return [p.exam_board, p.exam_year, p.paper_number, p.tier].filter(Boolean).join(' ') || p.filename;
+    },
+
+    async toggle(batchId) {
+        this.expanded[batchId] = !this.expanded[batchId];
+        if (this.expanded[batchId] && !this.questions[batchId]) {
+            const res = await API.get(`/api/questions?batch_id=${batchId}&question_source=past_paper&limit=200`);
+            this.questions[batchId] = res.questions;
+        }
+    },
+
+    async deletePaper(p) {
+        if (!confirm(`Delete "${this.paperLabel(p)}" and all its questions? This cannot be undone.`)) return;
+        await API.del(`/api/past-papers/${p.id}`);
+        await this.loadSubject();
+    },
+
+    async deleteQuestion(batchId, q) {
+        if (!confirm('Delete this question?')) return;
+        await API.del(`/api/questions/${q.id}`);
+        this.questions[batchId] = this.questions[batchId].filter(x => x.id !== q.id);
+    },
+
+    startEdit(q) {
+        this.editing = q.id;
+        this.editForm = {
+            question_text: q.question_text, answer_text: q.answer_text,
+            question_type: q.question_type, difficulty: q.difficulty,
+            question_ref: q.question_ref || '',
+        };
+    },
+    async saveEdit(batchId, q) {
+        await API.put(`/api/questions/${q.id}`, this.editForm);
+        Object.assign(q, this.editForm);
+        this.editing = null;
+    },
+
+    async loadSubcats(categoryId) {
+        if (categoryId && !this.subcategories[categoryId]) {
+            this.subcategories[categoryId] = await API.get(`/api/subcategories?category_id=${categoryId}`);
+        }
+    },
+
+    async tagOne(q, categoryId, subcategoryId) {
+        const catId = Number(categoryId) || null;
+        const subId = Number(subcategoryId) || null;
+        await API.post('/api/past-papers/tag', {
+            question_ids: [q.id],
+            category_id: catId,
+            subcategory_id: subId,
+        });
+        q.category_id = catId;
+        q.subcategory_id = subId;
+    },
+
+    selectedIds(batchId) {
+        return (this.questions[batchId] || []).filter(q => this.selected[q.id]).map(q => q.id);
+    },
+    toggleAll(batchId) {
+        const qs = this.questions[batchId] || [];
+        const allSel = qs.every(q => this.selected[q.id]);
+        qs.forEach(q => this.selected[q.id] = !allSel);
+    },
+    async applyBulkTag(batchId) {
+        const ids = this.selectedIds(batchId);
+        if (!ids.length) return;
+        const catId = Number(this.bulkCategoryId) || null;
+        const subId = Number(this.bulkSubcategoryId) || null;
+        await API.post('/api/past-papers/tag', {
+            question_ids: ids,
+            category_id: catId,
+            subcategory_id: subId,
+        });
+        const qs = this.questions[batchId];
+        qs.forEach(q => { if (this.selected[q.id]) {
+            q.category_id = catId;
+            q.subcategory_id = subId;
+        }});
+        ids.forEach(id => this.selected[id] = false);
+    },
+}));
+</script>
+
+<div x-data="pastPapersPage" class="max-w-5xl mx-auto p-4">
+    <h1 class="text-2xl font-bold mb-4">Past Paper Library</h1>
+
+    <div class="mb-4 flex items-center gap-2">
+        <label class="text-sm font-medium">Subject:</label>
+        <select x-model="subjectId" @change="loadSubject()" class="border rounded px-2 py-1">
+            <template x-for="s in subjects" :key="s.id">
+                <option :value="s.id" x-text="s.name"></option>
+            </template>
+        </select>
+    </div>
+
+    <div x-show="loading" class="text-gray-500">Loading…</div>
+    <div x-show="!loading && papers.length === 0" class="text-gray-500">
+        No past papers for this subject yet. Upload one from the Upload page.
+    </div>
+
+    <template x-for="p in papers" :key="p.id">
+        <div class="border rounded-lg mb-3 bg-white shadow-sm">
+            <div class="flex items-center justify-between p-3">
+                <button @click="toggle(p.id)" class="flex items-center gap-2 text-left">
+                    <span x-text="expanded[p.id] ? '▼' : '▶'"></span>
+                    <span class="font-semibold" x-text="paperLabel(p)"></span>
+                    <span class="text-sm text-gray-500"
+                          x-text="`${p.question_count} questions · ${p.figure_count} figures`"></span>
+                </button>
+                <button @click="deletePaper(p)"
+                        class="text-red-600 text-sm hover:underline">Delete paper</button>
+            </div>
+
+            <div x-show="expanded[p.id]" class="border-t p-3 space-y-3">
+                <div class="flex flex-wrap items-center gap-2 bg-gray-50 p-2 rounded"
+                     x-show="selectedIds(p.id).length">
+                    <span class="text-sm" x-text="`${selectedIds(p.id).length} selected`"></span>
+                    <select x-model="bulkCategoryId" @change="loadSubcats(bulkCategoryId)"
+                            class="border rounded px-2 py-1 text-sm">
+                        <option value="">— category —</option>
+                        <template x-for="c in categories" :key="c.id">
+                            <option :value="c.id" x-text="c.name"></option>
+                        </template>
+                    </select>
+                    <select x-model="bulkSubcategoryId" class="border rounded px-2 py-1 text-sm"
+                            x-show="bulkCategoryId">
+                        <option value="">— subcategory —</option>
+                        <template x-for="sc in (subcategories[bulkCategoryId] || [])" :key="sc.id">
+                            <option :value="sc.id" x-text="sc.name"></option>
+                        </template>
+                    </select>
+                    <button @click="applyBulkTag(p.id)"
+                            class="bg-indigo-600 text-white px-3 py-1 rounded text-sm">Apply tag</button>
+                </div>
+
+                <button @click="toggleAll(p.id)" class="text-sm text-indigo-600">Select all</button>
+
+                <template x-for="q in (questions[p.id] || [])" :key="q.id">
+                    <div class="border rounded p-2">
+                        <div class="flex items-start gap-2">
+                            <input type="checkbox" x-model="selected[q.id]" class="mt-1">
+                            <div class="flex-1">
+                                <div class="text-xs text-gray-500" x-text="q.question_ref || ''"></div>
+
+                                <div x-show="editing !== q.id">
+                                    <div class="whitespace-pre-wrap" x-text="q.question_text"></div>
+                                    <details class="mt-1">
+                                        <summary class="text-sm text-indigo-600 cursor-pointer">Answer</summary>
+                                        <div class="whitespace-pre-wrap text-sm text-gray-700"
+                                             x-text="q.answer_text || '(no answer)'"></div>
+                                    </details>
+                                    <img x-show="q.image_filename" :src="`/images/${q.image_filename}`"
+                                         class="mt-2 max-h-40 rounded border" alt="figure">
+                                    <div class="mt-2 flex flex-wrap items-center gap-2">
+                                        <select class="border rounded px-1 py-0.5 text-xs"
+                                                @change="loadSubcats($event.target.value); tagOne(q, $event.target.value, '')">
+                                            <option value="">— category —</option>
+                                            <template x-for="c in categories" :key="c.id">
+                                                <option :value="c.id" :selected="q.category_id === c.id"
+                                                        x-text="c.name"></option>
+                                            </template>
+                                        </select>
+                                        <button @click="startEdit(q)" class="text-xs text-indigo-600">Edit</button>
+                                        <button @click="deleteQuestion(p.id, q)" class="text-xs text-red-600">Delete</button>
+                                    </div>
+                                </div>
+
+                                <div x-show="editing === q.id" class="space-y-1">
+                                    <input x-model="editForm.question_ref" placeholder="ref (e.g. 1a)"
+                                           class="border rounded px-2 py-1 text-sm w-32">
+                                    <textarea x-model="editForm.question_text" rows="2"
+                                              class="border rounded px-2 py-1 text-sm w-full"></textarea>
+                                    <textarea x-model="editForm.answer_text" rows="2"
+                                              class="border rounded px-2 py-1 text-sm w-full"></textarea>
+                                    <div class="flex gap-2">
+                                        <button @click="saveEdit(p.id, q)"
+                                                class="bg-green-600 text-white px-3 py-1 rounded text-sm">Save</button>
+                                        <button @click="editing = null"
+                                                class="px-3 py-1 rounded text-sm border">Cancel</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </template>
+</div>
