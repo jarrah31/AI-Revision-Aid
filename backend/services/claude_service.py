@@ -352,6 +352,11 @@ def _normalise_multi_response(r: dict | None) -> dict | None:
     select_count = r.get("select_count") or n_correct
     if not (1 <= select_count <= len(options)):
         return None
+    # Marking is an exact-set match, so the student must tick exactly as many
+    # boxes as there are correct options. If the model returned an in-range but
+    # inconsistent count (e.g. "select 3" with only 2 correct), align it to the
+    # correct count so the UI's "Select N" label can never mislead.
+    select_count = n_correct
     stem = (r.get("stem") or "").strip()
     if not stem:
         return None
