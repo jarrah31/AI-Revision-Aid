@@ -382,6 +382,8 @@ _AI_SETTING_METADATA: dict[str, dict] = {
     "ai_model_handwritten_qa":         {"label": "Model",  "type": "model",  "group": "Handwritten Notes Q&A",                    "group_key": "handwritten_qa"},
     "ai_prompt_handwritten_ocr":       {"label": "Prompt", "type": "prompt", "group": "Handwritten Notes OCR",                    "group_key": "handwritten_ocr"},
     "ai_prompt_handwritten_qa":        {"label": "Prompt", "type": "prompt", "group": "Handwritten Notes Q&A",                    "group_key": "handwritten_qa"},
+    "ai_model_multi_response":         {"label": "Model",  "type": "model",  "group": "Multiple-Response Detection",              "group_key": "multi_response"},
+    "ai_prompt_multi_response":        {"label": "Prompt", "type": "prompt", "group": "Multiple-Response Detection",              "group_key": "multi_response"},
 }
 
 AVAILABLE_MODELS: list[str] = [

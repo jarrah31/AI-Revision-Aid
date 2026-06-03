@@ -13,6 +13,7 @@ from backend.prompts.fact_check import FACT_CHECK_PROMPT
 from backend.prompts.matching import MATCHING_PROMPT
 from backend.prompts.handwritten_ocr import HANDWRITTEN_OCR_PROMPT
 from backend.prompts.handwritten_qa import HANDWRITTEN_QA_PROMPT
+from backend.prompts.multiple_response_detection import MULTIPLE_RESPONSE_DETECTION_PROMPT
 
 # ── Default models ─────────────────────────────────────────────────────────────
 # These are the hardcoded defaults; admins can override any of them via the
@@ -23,6 +24,7 @@ QUIZ_MODEL             = "claude-haiku-4-5"    # Text-only — MCQ, judging, mat
 FACT_CHECK_MODEL       = "claude-sonnet-4-6"   # Needs web-search tool
 HANDWRITTEN_OCR_MODEL  = "claude-sonnet-4-6"   # Vision — handwritten image OCR
 HANDWRITTEN_QA_MODEL   = "claude-haiku-4-5"    # Text-only — Q&A from confirmed text
+MULTI_RESPONSE_MODEL   = "claude-haiku-4-5"    # Text-only — structuring tick-box questions
 
 # Per-model pricing (cost per million tokens) — source: platform.claude.com/docs/en/about-claude/pricing
 MODEL_PRICING: dict[str, dict[str, float]] = {
@@ -71,6 +73,9 @@ AI_SETTING_DEFAULTS: dict[str, str] = {
     "ai_model_handwritten_qa":      HANDWRITTEN_QA_MODEL,
     "ai_prompt_handwritten_ocr":    HANDWRITTEN_OCR_PROMPT,
     "ai_prompt_handwritten_qa":     HANDWRITTEN_QA_PROMPT,
+    # Multiple-response detection
+    "ai_model_multi_response":      MULTI_RESPONSE_MODEL,
+    "ai_prompt_multi_response":     MULTIPLE_RESPONSE_DETECTION_PROMPT,
 }
 
 
@@ -289,6 +294,68 @@ def generate_mcq_distractors(questions: list[dict], subject: str) -> tuple[list,
         messages=[{"role": "user", "content": prompt}],
     )
     return json.loads(_strip_fences(message.content[0].text)), _calc_usage(message, model)
+
+
+def detect_multiple_response_batch(questions: list[dict], subject: str) -> tuple[list, dict]:
+    """Identify and structure 'tick N boxes' multiple-response questions in a batch.
+
+    Returns (results, usage) where results is aligned 1:1 with `questions`:
+    each element is None (ordinary question) or a dict
+    {"select_count": int, "stem": str, "options": [{"text": str, "is_correct": bool}]}.
+    Invalid/degenerate detections (fewer than 2 options, no correct option, or a
+    select_count out of range) are normalised to None.
+    """
+    client = get_client()
+    model  = _get_ai_setting("ai_model_multi_response")
+
+    questions_for_prompt = [
+        {"id": q["id"], "question_text": q["question_text"], "answer_text": q.get("answer_text", "")}
+        for q in questions
+    ]
+    prompt = _get_ai_setting("ai_prompt_multi_response").format(
+        subject=subject,
+        questions_json=json.dumps(questions_for_prompt, indent=2),
+    )
+
+    message = client.messages.create(
+        model=model,
+        max_tokens=4096,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = json.loads(_strip_fences(message.content[0].text))
+    by_id = {r.get("question_id"): r for r in raw.get("results", [])}
+
+    results: list = []
+    for q in questions:
+        r = by_id.get(q["id"])
+        results.append(_normalise_multi_response(r))
+    return results, _calc_usage(message, model)
+
+
+def _normalise_multi_response(r: dict | None) -> dict | None:
+    """Validate one detector result; return a clean dict or None if not valid."""
+    if not r or not r.get("is_multiple_response"):
+        return None
+    options = [
+        {"text": str(o["text"]), "is_correct": bool(o.get("is_correct"))}
+        for o in r.get("options", [])
+        if isinstance(o, dict) and o.get("text")
+    ]
+    if len(options) < 2:
+        return None
+    n_correct = sum(1 for o in options if o["is_correct"])
+    if n_correct < 1:
+        return None
+    # An absent or zero select_count intentionally falls back to the number of
+    # correct options rather than rejecting the detection — the mark scheme is the
+    # source of truth for how many ticks are required.
+    select_count = r.get("select_count") or n_correct
+    if not (1 <= select_count <= len(options)):
+        return None
+    stem = (r.get("stem") or "").strip()
+    if not stem:
+        return None
+    return {"select_count": select_count, "stem": stem, "options": options}
 
 
 def judge_typed_answer(
