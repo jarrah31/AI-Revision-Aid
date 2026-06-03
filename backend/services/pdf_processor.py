@@ -4,6 +4,12 @@ import pymupdf
 from PIL import Image
 import io
 
+# Exam-board PDFs are tagged/accessibility PDFs whose logical structure trees are
+# often malformed. MuPDF recovers fine while rendering but prints recoverable
+# warnings (e.g. "No common ancestor in structure tree") to stderr. Suppress that
+# console noise; inspect suppressed messages via pymupdf.TOOLS.mupdf_warnings().
+pymupdf.TOOLS.mupdf_display_errors(False)
+
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
 
 
