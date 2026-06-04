@@ -197,6 +197,53 @@ def test_past_paper_question_without_figure_has_no_image(
     assert question["image_id"] is None
 
 
+def test_past_paper_question_with_null_answer_stored_as_empty(
+    isolated_db, db_conn, regular_user, make_subject, make_batch, monkeypatch
+):
+    """Regression: a question-paper question with an explicit null answer (no mark
+    scheme yet) must store answer_text as '' rather than crashing the NOT NULL
+    constraint and dropping the page's questions."""
+    monkeypatch.setattr(upload, "DB_PATH", isolated_db)
+    user_id, _ = regular_user
+    subject_id = make_subject()
+    batch_id = make_batch(user_id, subject_id)
+    _set_past_paper(db_conn, batch_id)
+
+    extraction_result = {
+        "page_type": "questions",
+        "questions": [
+            {"question_ref": "5a", "question": "State two functions of the liver.",
+             "answer": None, "type": None, "difficulty": None,
+             "related_image_index": None},
+        ],
+        "answers": [],
+        "images": [],
+    }
+    usage = {"input_tokens": 10, "output_tokens": 10, "cost_usd": 0.0, "model": "claude-haiku-4-5"}
+    monkeypatch.setattr(upload, "extract_qa_from_past_paper", lambda b64, subj: (extraction_result, usage))
+    monkeypatch.setattr(upload, "render_page_to_png", lambda path, n: b"fakepng")
+    monkeypatch.setattr(upload, "save_full_page_image", lambda *a, **kw: "full.png")
+
+    upload.process_batch(
+        batch_id=batch_id, pdf_path="ignored.pdf", subject_name="Biology",
+        subject_id=subject_id, user_id=user_id, page_start=1, page_end=1,
+        batch_type="past_paper",
+    )
+
+    conn = sqlite3.connect(str(isolated_db))
+    conn.row_factory = sqlite3.Row
+    q = conn.execute("SELECT * FROM questions WHERE batch_id = ?", (batch_id,)).fetchone()
+    err = conn.execute("SELECT error_message FROM upload_batches WHERE id = ?", (batch_id,)).fetchone()
+    conn.close()
+
+    assert q is not None                       # the question was stored, not dropped
+    assert q["answer_text"] == ""              # null coerced to empty string
+    assert q["question_text"] == "State two functions of the liver."
+    assert q["question_type"] == "factual"     # null type falls back to default
+    assert q["difficulty"] == 1                # null difficulty falls back to default
+    assert err["error_message"] is None        # no NOT NULL crash recorded
+
+
 def _make_pp_batch_with_questions(db_conn, user_id, subject_id, texts,
                                   exam_board="AQA", exam_year=2023, paper_number="Paper 1"):
     """Insert a past_paper batch (with exam metadata) + its questions. Returns [pp_ids]."""

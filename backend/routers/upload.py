@@ -421,10 +421,14 @@ def process_batch(
                             category_id,
                             subcategory_id,
                             display_page,
-                            q.get("question", ""),
-                            q.get("answer", ""),
-                            q.get("type", "factual"),
-                            q.get("difficulty", 1),
+                            # `.get(k, default)` only fires for MISSING keys; the model can
+                            # emit an explicit JSON null (e.g. a question-paper question with
+                            # no answer yet — answers arrive later from the mark scheme), so
+                            # coerce None to "" to satisfy the NOT NULL columns.
+                            q.get("question") or "",
+                            q.get("answer") or "",
+                            q.get("type") or "factual",
+                            q.get("difficulty") or 1,
                             image_id,
                             q.get("source_quote") or None,
                             question_source,
