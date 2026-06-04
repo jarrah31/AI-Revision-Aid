@@ -103,3 +103,27 @@ def test_history_handwritten_flag(client, db_conn):
     b = resp.json()[0]
     assert b["source_type"] == "images"
     assert b["is_handwritten"] == 1
+
+
+def test_history_includes_past_paper_count(client, db_conn):
+    """GET /api/costs/history returns past_paper_count per batch."""
+    uid, token = _insert_user(db_conn, "covuser")
+    sid = _make_subject(db_conn)
+    bid = _make_batch(db_conn, uid, sid, batch_type="knowledge_organiser")
+    # 2 AI-generated + 1 past-paper question in this batch
+    for src in ("ai_generated", "ai_generated", "past_paper"):
+        db_conn.execute(
+            """INSERT INTO questions
+               (batch_id, user_id, subject_id, page_number, question_text,
+                answer_text, approved, question_source)
+               VALUES (?, ?, ?, 1, 'q', 'a', 1, ?)""",
+            (bid, uid, sid, src),
+        )
+    db_conn.commit()
+
+    resp = client.get("/api/costs/history",
+                      headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    batch = next(b for b in resp.json() if b["id"] == bid)
+    assert batch["question_count"] == 3
+    assert batch["past_paper_count"] == 1

@@ -84,6 +84,7 @@ def get_cost_history(
                   sc.name as subcategory_name,
                   (SELECT COUNT(*) FROM questions q WHERE q.batch_id = b.id) as question_count,
                   (SELECT COUNT(*) FROM questions q WHERE q.batch_id = b.id AND q.approved = 1) as approved_count,
+                  (SELECT COUNT(*) FROM questions q WHERE q.batch_id = b.id AND q.question_source = 'past_paper') as past_paper_count,
                   (SELECT SUM(au.input_tokens) FROM api_usage au WHERE au.batch_id = b.id) as input_tokens,
                   (SELECT SUM(au.output_tokens) FROM api_usage au WHERE au.batch_id = b.id) as output_tokens,
                   (SELECT COUNT(*) FROM api_usage au WHERE au.batch_id = b.id) as api_calls
