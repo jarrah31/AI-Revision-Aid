@@ -8,6 +8,29 @@ import backend.routers.upload as upload
 _MATCH_USAGE = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "model": "claude-haiku-4-5"}
 
 
+def test_normalise_ref_preserves_legacy_behaviour():
+    f = upload._normalise_ref
+    assert f("1 (a)") == "1a"
+    assert f("2b.") == "2b"
+    assert f("Question 3") == "3"
+    assert f("") == ""
+    assert f(None) is None
+
+
+def test_normalise_ref_strips_zero_padding_so_qp_and_ms_join():
+    """Real failure observed on AQA JUN22: a model zero-pads the question paper
+    ('02.1') but not the mark scheme ('2.1'). After normalisation these MUST
+    collapse to the same key, or the answer silently fails to attach."""
+    f = upload._normalise_ref
+    assert f("02.1") == f("2.1") == "21"
+    assert f("04.6") == f("4.6") == "46"
+    assert f("01.1") == f("1.1") == "11"
+    # zero-padding with a letter sub-part
+    assert f("01a") == f("1a") == "1a"
+    # multi-digit question numbers keep their internal digits
+    assert f("10.1") == "101"
+
+
 def _set_past_paper(db_conn, batch_id):
     """Flip a batch's type to past_paper (make_batch defaults to knowledge_organiser)."""
     db_conn.execute(

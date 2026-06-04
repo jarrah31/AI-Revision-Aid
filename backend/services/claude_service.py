@@ -19,7 +19,12 @@ from backend.prompts.multiple_response_detection import MULTIPLE_RESPONSE_DETECT
 # These are the hardcoded defaults; admins can override any of them via the
 # AI Settings panel (stored in the `settings` DB table).
 
-EXTRACTION_MODEL       = "claude-sonnet-4-6"   # Vision — PDF page images
+EXTRACTION_MODEL       = "claude-sonnet-4-6"   # Vision — KO PDF page images
+# Past-paper extraction defaults to Haiku: a head-to-head on real AQA exam pages
+# showed extraction quality on par with Sonnet at ~1/3 the cost. The one risk —
+# question_ref formatting drifting between the QP and MS calls — is handled by
+# _normalise_ref (leading-zero canonicalisation), not by paying for a larger model.
+PAST_PAPER_EXTRACTION_MODEL = "claude-haiku-4-5"   # Vision — past-paper QP/MS pages
 QUIZ_MODEL             = "claude-haiku-4-5"    # Text-only — MCQ, judging, matching
 FACT_CHECK_MODEL       = "claude-sonnet-4-6"   # Needs web-search tool
 HANDWRITTEN_OCR_MODEL  = "claude-sonnet-4-6"   # Vision — handwritten image OCR
@@ -56,7 +61,7 @@ WEB_SEARCH_COST = 10.0 / 1_000  # $10.00 / 1,000 searches
 AI_SETTING_DEFAULTS: dict[str, str] = {
     # Models
     "ai_model_ko_extraction":       EXTRACTION_MODEL,
-    "ai_model_past_paper_extraction": EXTRACTION_MODEL,
+    "ai_model_past_paper_extraction": PAST_PAPER_EXTRACTION_MODEL,
     "ai_model_mcq":                 QUIZ_MODEL,
     "ai_model_judging":             QUIZ_MODEL,
     "ai_model_fact_check":          FACT_CHECK_MODEL,

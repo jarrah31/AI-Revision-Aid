@@ -47,15 +47,29 @@ class OcrSectionIn(BaseModel):
 
 def _normalise_ref(ref: str) -> str:
     """Normalise a question_ref to a consistent form for matching.
-    e.g. '1 (a)' -> '1a', '2b.' -> '2b', 'Question 3' -> '3'
+    e.g. '1 (a)' -> '1a', '2b.' -> '2b', 'Question 3' -> '3',
+         '02.1' -> '21', '2.1' -> '21', '04.6' -> '46'
+
+    Leading zeros are stripped per segment: models are inconsistent about
+    zero-padding *between* the question-paper and mark-scheme extraction calls
+    (observed on AQA JUN22: QP '02.1' vs MS '2.1'). Without this, the two refs
+    normalise to '021' vs '21' and the mark-scheme answer never attaches to the
+    question. Splitting on separators first preserves segment boundaries so a
+    sub-part's own leading zero ('04.06') is handled independently.
     """
     if not ref:
         return ref
     import re
     r = ref.strip().lower()
-    r = re.sub(r"^question\s*", "", r)   # strip leading "question"
-    r = re.sub(r"[\s.()\[\]]+", "", r)   # remove spaces, brackets, dots
-    return r
+    r = re.sub(r"^question\s*", "", r)            # strip leading "question"
+    segments = re.split(r"[\s.()\[\]]+", r)       # split on spaces/dots/brackets
+    out = []
+    for seg in segments:
+        if not seg:
+            continue
+        seg = re.sub(r"^0+(\d)", r"\1", seg)      # strip leading zeros from a digit run
+        out.append(seg)
+    return "".join(out)
 
 
 def _process_ms_pages(
