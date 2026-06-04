@@ -337,6 +337,9 @@ def init_db():
         # questions. JSON: {"select_count": int, "options":[{"text","is_correct"}]}.
         # NULL for ordinary questions.
         "ALTER TABLE questions ADD COLUMN options_json TEXT DEFAULT NULL",
+        # Record which model processed each API call (admin-configurable at
+        # runtime, so cost rows are otherwise ambiguous about which model ran).
+        "ALTER TABLE api_usage ADD COLUMN model TEXT DEFAULT NULL",
     ]:
         try:
             db.execute(migration)

@@ -35,9 +35,9 @@ def detect_and_store_multi_response(
 
     db.execute(
         """INSERT INTO api_usage
-           (user_id, batch_id, call_type, input_tokens, output_tokens, cost_usd)
-           VALUES (?, ?, 'multi_response_detection', ?, ?, ?)""",
-        (user_id, batch_id, usage["input_tokens"], usage["output_tokens"], usage["cost_usd"]),
+           (user_id, batch_id, call_type, input_tokens, output_tokens, cost_usd, model)
+           VALUES (?, ?, 'multi_response_detection', ?, ?, ?, ?)""",
+        (user_id, batch_id, usage["input_tokens"], usage["output_tokens"], usage["cost_usd"], usage.get("model")),
     )
 
     updated = 0

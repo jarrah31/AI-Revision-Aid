@@ -402,9 +402,9 @@ def submit_answer(
             )
             db.execute(
                 """INSERT INTO api_usage
-                   (user_id, batch_id, call_type, input_tokens, output_tokens, cost_usd)
-                   VALUES (?, NULL, 'answer_judging', ?, ?, ?)""",
-                (user["id"], usage["input_tokens"], usage["output_tokens"], usage["cost_usd"]),
+                   (user_id, batch_id, call_type, input_tokens, output_tokens, cost_usd, model)
+                   VALUES (?, NULL, 'answer_judging', ?, ?, ?, ?)""",
+                (user["id"], usage["input_tokens"], usage["output_tokens"], usage["cost_usd"], usage.get("model")),
             )
             verdict = result.get("verdict", "incorrect")
             is_correct = 1 if verdict == "correct" else 0

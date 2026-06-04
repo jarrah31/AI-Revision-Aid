@@ -112,7 +112,7 @@ def _calc_usage(message, model: str = EXTRACTION_MODEL) -> dict:
     input_tokens  = message.usage.input_tokens
     output_tokens = message.usage.output_tokens
     cost_usd = (input_tokens * pricing["input"]) + (output_tokens * pricing["output"])
-    return {"input_tokens": input_tokens, "output_tokens": output_tokens, "cost_usd": cost_usd}
+    return {"input_tokens": input_tokens, "output_tokens": output_tokens, "cost_usd": cost_usd, "model": model}
 
 
 def _strip_fences(text: str) -> str:
@@ -249,7 +249,7 @@ def extract_qa_from_page_with_fallback(png_bytes: bytes, subject: str) -> tuple[
 
     all_questions: list = []
     all_images: list = []
-    total_usage: dict = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+    total_usage: dict = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "model": None}
 
     for sec in sections:
         sec_png = crop_section_to_bytes(
@@ -267,6 +267,7 @@ def extract_qa_from_page_with_fallback(png_bytes: bytes, subject: str) -> tuple[
         total_usage["input_tokens"] += sec_usage["input_tokens"]
         total_usage["output_tokens"] += sec_usage["output_tokens"]
         total_usage["cost_usd"] += sec_usage["cost_usd"]
+        total_usage["model"] = sec_usage.get("model")
 
     return {"questions": all_questions, "images": all_images}, total_usage
 
@@ -556,5 +557,6 @@ def fact_check_question(question: str, answer: str, subject: str) -> tuple[dict,
         "cost_usd":        token_cost + search_cost,
         "search_requests": search_requests,
         "search_cost_usd": search_cost,
+        "model":           model,
     }
     return result, usage

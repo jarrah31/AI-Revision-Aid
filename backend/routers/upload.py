@@ -82,9 +82,9 @@ def _process_ms_pages(
             # Record cost
             db.execute(
                 """INSERT INTO api_usage
-                   (user_id, batch_id, call_type, input_tokens, output_tokens, cost_usd)
-                   VALUES (?, ?, 'ms_extraction', ?, ?, ?)""",
-                (user_id, batch_id, usage["input_tokens"], usage["output_tokens"], usage["cost_usd"]),
+                   (user_id, batch_id, call_type, input_tokens, output_tokens, cost_usd, model)
+                   VALUES (?, ?, 'ms_extraction', ?, ?, ?, ?)""",
+                (user_id, batch_id, usage["input_tokens"], usage["output_tokens"], usage["cost_usd"], usage.get("model")),
             )
             db.execute(
                 "UPDATE upload_batches SET cost_usd = cost_usd + ? WHERE id = ?",
@@ -331,9 +331,9 @@ def process_batch(
                         )
                         db.execute(
                             """INSERT INTO api_usage
-                               (user_id, batch_id, call_type, input_tokens, output_tokens, cost_usd)
-                               VALUES (?, ?, 'qa_extraction', ?, ?, ?)""",
-                            (user_id, batch_id, usage["input_tokens"], usage["output_tokens"], usage["cost_usd"]),
+                               (user_id, batch_id, call_type, input_tokens, output_tokens, cost_usd, model)
+                               VALUES (?, ?, 'qa_extraction', ?, ?, ?, ?)""",
+                            (user_id, batch_id, usage["input_tokens"], usage["output_tokens"], usage["cost_usd"], usage.get("model")),
                         )
                         db.commit()
                         continue
@@ -346,9 +346,9 @@ def process_batch(
                 # Record API usage for this page
                 db.execute(
                     """INSERT INTO api_usage
-                       (user_id, batch_id, call_type, input_tokens, output_tokens, cost_usd)
-                       VALUES (?, ?, 'qa_extraction', ?, ?, ?)""",
-                    (user_id, batch_id, usage["input_tokens"], usage["output_tokens"], usage["cost_usd"]),
+                       (user_id, batch_id, call_type, input_tokens, output_tokens, cost_usd, model)
+                       VALUES (?, ?, 'qa_extraction', ?, ?, ?, ?)""",
+                    (user_id, batch_id, usage["input_tokens"], usage["output_tokens"], usage["cost_usd"], usage.get("model")),
                 )
                 db.execute(
                     "UPDATE upload_batches SET cost_usd = cost_usd + ? WHERE id = ?",
@@ -533,9 +533,9 @@ def process_batch_ocr(
 
                 db.execute(
                     """INSERT INTO api_usage
-                       (user_id, batch_id, call_type, input_tokens, output_tokens, cost_usd)
-                       VALUES (?, ?, 'handwritten_ocr', ?, ?, ?)""",
-                    (user_id, batch_id, usage["input_tokens"], usage["output_tokens"], usage["cost_usd"]),
+                       (user_id, batch_id, call_type, input_tokens, output_tokens, cost_usd, model)
+                       VALUES (?, ?, 'handwritten_ocr', ?, ?, ?, ?)""",
+                    (user_id, batch_id, usage["input_tokens"], usage["output_tokens"], usage["cost_usd"], usage.get("model")),
                 )
                 db.execute(
                     "UPDATE upload_batches SET cost_usd = cost_usd + ?, processed_pages = ? WHERE id = ?",
@@ -642,9 +642,9 @@ def process_batch_from_text(
 
                 db.execute(
                     """INSERT INTO api_usage
-                       (user_id, batch_id, call_type, input_tokens, output_tokens, cost_usd)
-                       VALUES (?, ?, 'handwritten_qa', ?, ?, ?)""",
-                    (user_id, batch_id, usage["input_tokens"], usage["output_tokens"], usage["cost_usd"]),
+                       (user_id, batch_id, call_type, input_tokens, output_tokens, cost_usd, model)
+                       VALUES (?, ?, 'handwritten_qa', ?, ?, ?, ?)""",
+                    (user_id, batch_id, usage["input_tokens"], usage["output_tokens"], usage["cost_usd"], usage.get("model")),
                 )
                 db.execute(
                     "UPDATE upload_batches SET cost_usd = cost_usd + ? WHERE id = ?",

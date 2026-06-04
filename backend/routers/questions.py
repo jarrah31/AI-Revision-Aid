@@ -160,9 +160,9 @@ def fact_check(
 
     # Record cost in api_usage
     db.execute(
-        """INSERT INTO api_usage (user_id, batch_id, call_type, input_tokens, output_tokens, cost_usd)
-           VALUES (?, ?, 'fact_check', ?, ?, ?)""",
-        (user["id"], q.get("batch_id"), usage["input_tokens"], usage["output_tokens"], usage["cost_usd"]),
+        """INSERT INTO api_usage (user_id, batch_id, call_type, input_tokens, output_tokens, cost_usd, model)
+           VALUES (?, ?, 'fact_check', ?, ?, ?, ?)""",
+        (user["id"], q.get("batch_id"), usage["input_tokens"], usage["output_tokens"], usage["cost_usd"], usage.get("model")),
     )
     db.commit()
 

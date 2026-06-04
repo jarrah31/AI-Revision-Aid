@@ -40,9 +40,9 @@ def ensure_mcq_options(questions: list[dict], db: sqlite3.Connection, user_id: i
             results, usage = generate_mcq_distractors(qs, subject)
             db.execute(
                 """INSERT INTO api_usage
-                   (user_id, batch_id, call_type, input_tokens, output_tokens, cost_usd)
-                   VALUES (?, NULL, 'mcq_generation', ?, ?, ?)""",
-                (user_id, usage["input_tokens"], usage["output_tokens"], usage["cost_usd"]),
+                   (user_id, batch_id, call_type, input_tokens, output_tokens, cost_usd, model)
+                   VALUES (?, NULL, 'mcq_generation', ?, ?, ?, ?)""",
+                (user_id, usage["input_tokens"], usage["output_tokens"], usage["cost_usd"], usage.get("model")),
             )
             for result in results:
                 qid = result["question_id"]
