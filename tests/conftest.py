@@ -201,14 +201,16 @@ def make_question(db_conn):
     """Returns a factory that inserts a question row."""
     def _fn(batch_id, user_id, subject_id,
             question_text="What is X?", answer_text="X is Y.",
-            approved=1, page_number=1):
+            approved=1, page_number=1,
+            question_source="ai_generated", question_source_detail=None):
         cur = db_conn.execute(
             """INSERT INTO questions
                (batch_id, user_id, subject_id, page_number, question_text,
-                answer_text, approved)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                answer_text, approved, question_source, question_source_detail)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (batch_id, user_id, subject_id, page_number,
-             question_text, answer_text, approved),
+             question_text, answer_text, approved,
+             question_source, question_source_detail),
         )
         db_conn.commit()
         return cur.lastrowid

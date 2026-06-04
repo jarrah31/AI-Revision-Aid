@@ -79,6 +79,49 @@ def list_questions(
     }
 
 
+@router.get("/coverage")
+def question_coverage(
+    batch_id: int,
+    user: dict = Depends(get_current_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Past-paper vs AI-generated coverage for a single batch (user-scoped)."""
+    batch = db.execute(
+        "SELECT id, batch_type FROM upload_batches WHERE id = ? AND user_id = ?",
+        (batch_id, user["id"]),
+    ).fetchone()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    rows = db.execute(
+        "SELECT question_source, COUNT(*) AS c FROM questions "
+        "WHERE batch_id = ? AND user_id = ? GROUP BY question_source",
+        (batch_id, user["id"]),
+    ).fetchall()
+    counts = {r["question_source"]: r["c"] for r in rows}
+    past_paper = counts.get("past_paper", 0)
+    ai_generated = counts.get("ai_generated", 0)
+    total = sum(counts.values())
+
+    by_paper_rows = db.execute(
+        "SELECT COALESCE(NULLIF(TRIM(question_source_detail), ''), 'Past Paper') AS source, "
+        "       COUNT(*) AS count "
+        "FROM questions "
+        "WHERE batch_id = ? AND user_id = ? AND question_source = 'past_paper' "
+        "GROUP BY source "
+        "ORDER BY count DESC, source ASC",
+        (batch_id, user["id"]),
+    ).fetchall()
+
+    return {
+        "batch_type": batch["batch_type"],
+        "total": total,
+        "past_paper": past_paper,
+        "ai_generated": ai_generated,
+        "by_paper": [{"source": r["source"], "count": r["count"]} for r in by_paper_rows],
+    }
+
+
 @router.post("/{question_id}/fact-check")
 def fact_check(
     question_id: int,

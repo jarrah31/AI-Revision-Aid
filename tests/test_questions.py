@@ -306,6 +306,74 @@ def test_delete_question_other_user_returns_404(
     assert r.status_code == 404
 
 
+# ── Coverage ──────────────────────────────────────────────────────────────────
+
+def test_coverage_counts_and_breakdown(
+    client, user_headers, regular_user, make_subject, make_batch, make_question
+):
+    uid, _ = regular_user
+    sid = make_subject()
+    bid = make_batch(uid, sid)
+    make_question(bid, uid, sid, question_source="ai_generated")
+    make_question(bid, uid, sid, question_source="ai_generated")
+    make_question(bid, uid, sid, question_source="past_paper",
+                  question_source_detail="AQA 2023 Paper 1")
+    make_question(bid, uid, sid, question_source="past_paper",
+                  question_source_detail="AQA 2023 Paper 1")
+    make_question(bid, uid, sid, question_source="past_paper",
+                  question_source_detail="AQA 2022 Paper 2")
+
+    r = client.get(f"/api/questions/coverage?batch_id={bid}", headers=user_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total"] == 5
+    assert data["past_paper"] == 3
+    assert data["ai_generated"] == 2
+    assert data["by_paper"] == [
+        {"source": "AQA 2023 Paper 1", "count": 2},
+        {"source": "AQA 2022 Paper 2", "count": 1},
+    ]
+
+
+def test_coverage_null_detail_bucketed_as_past_paper(
+    client, user_headers, regular_user, make_subject, make_batch, make_question
+):
+    uid, _ = regular_user
+    sid = make_subject()
+    bid = make_batch(uid, sid)
+    make_question(bid, uid, sid, question_source="past_paper",
+                  question_source_detail=None)
+    r = client.get(f"/api/questions/coverage?batch_id={bid}", headers=user_headers)
+    assert r.status_code == 200
+    assert r.json()["by_paper"] == [{"source": "Past Paper", "count": 1}]
+
+
+def test_coverage_empty_batch(
+    client, user_headers, regular_user, make_subject, make_batch
+):
+    uid, _ = regular_user
+    sid = make_subject()
+    bid = make_batch(uid, sid)  # make_batch defaults batch_type='knowledge_organiser'
+    r = client.get(f"/api/questions/coverage?batch_id={bid}", headers=user_headers)
+    assert r.status_code == 200
+    assert r.json() == {
+        "batch_type": "knowledge_organiser",
+        "total": 0, "past_paper": 0, "ai_generated": 0, "by_paper": [],
+    }
+
+
+def test_coverage_other_user_returns_404(
+    client, regular_user, second_user, make_subject, make_batch
+):
+    uid, _ = regular_user
+    sid = make_subject()
+    bid = make_batch(uid, sid)
+    _, other_token = second_user
+    r = client.get(f"/api/questions/coverage?batch_id={bid}",
+                   headers={"Authorization": f"Bearer {other_token}"})
+    assert r.status_code == 404
+
+
 # ── Export ────────────────────────────────────────────────────────────────────
 
 def test_export_questions_returns_approved_only(
