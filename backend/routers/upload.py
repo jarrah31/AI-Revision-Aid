@@ -1119,6 +1119,32 @@ def _normalize_paper_number(pn: str | None) -> str:
     return s
 
 
+_MONTH_TOKENS = (
+    "JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC|"
+    "SUMMER|WINTER|AUTUMN|SPRING"
+)
+
+
+def _year_from_filename(filename: str | None) -> int | None:
+    """Best-effort exam year extracted from a filename.
+
+    Question-paper cover sheets often omit the year, so the detector returns
+    exam_year=None even though the filename (e.g. 'Biology-AQA-84611F-QP-JUN22.PDF')
+    states it. Prefer an explicit 4-digit year, else a month/season code followed
+    by a 2-digit year ('JUN22' -> 2022). Returns None when nothing plausible is found.
+    """
+    if not filename:
+        return None
+    name = filename.upper()
+    m = re.search(r"(?<!\d)(20\d{2})(?!\d)", name)   # explicit 4-digit year
+    if m:
+        return int(m.group(1))
+    m = re.search(rf"(?:{_MONTH_TOKENS})[-_ ]?(\d{{2}})(?!\d)", name)  # 'JUN22'
+    if m:
+        return 2000 + int(m.group(1))
+    return None
+
+
 def _compute_matches(files: list[dict]) -> list[dict]:
     """Group detected files into QP+MS pairs by shared metadata."""
     from collections import defaultdict
@@ -1127,14 +1153,17 @@ def _compute_matches(files: list[dict]) -> list[dict]:
     unmatched = []
 
     for f in detected:
+        # Fall back to the filename when the cover page didn't state the year
+        # (common on candidate question-paper front sheets).
+        eff_year = f["exam_year"] or _year_from_filename(f.get("filename"))
         key = (
             (f["exam_board"] or "").lower(),
-            f["exam_year"],
+            eff_year,
             _normalize_paper_number(f["paper_number"]),
             (f["tier"] or "").lower(),
         )
         # Only group when at least board+year are known
-        if f["exam_board"] and f["exam_year"]:
+        if f["exam_board"] and eff_year:
             groups[key].append(f)
         else:
             unmatched.append(f)
@@ -1153,7 +1182,7 @@ def _compute_matches(files: list[dict]) -> list[dict]:
                 "qp_id": qp["id"],
                 "ms_id": ms["id"] if ms else None,
                 "exam_board": qp["exam_board"],
-                "exam_year": qp["exam_year"],
+                "exam_year": qp["exam_year"] or key[1],   # key[1] = effective (filename-derived) year
                 "paper_number": qp["paper_number"],
                 "tier": qp["tier"],
             })
@@ -1207,7 +1236,7 @@ def _detect_papers_task(session_id: str, file_ids: list[int]):
                     (
                         result.get("paper_type"),
                         result.get("exam_board"),
-                        result.get("exam_year"),
+                        result.get("exam_year") or _year_from_filename(row["filename"]),
                         result.get("paper_number"),
                         result.get("tier"),
                         result.get("subject"),
@@ -1364,7 +1393,7 @@ def confirm_detection(
                 user["id"], req.subject_id, req.category_id, req.subcategory_id,
                 qp_file["filename"],
                 total_pages, total_pages,
-                qp_file["exam_board"], qp_file["exam_year"],
+                qp_file["exam_board"], qp_file["exam_year"] or _year_from_filename(qp_file["filename"]),
                 qp_file["paper_number"], qp_file["tier"],
             ),
         )

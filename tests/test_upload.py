@@ -385,13 +385,60 @@ def test_matching_prompt_supports_multiple_and_formats():
     assert "different way" in lowered
 
 
-def _df(fid, paper_type, paper_number, tier, board="AQA", year=2024):
+def _df(fid, paper_type, paper_number, tier, board="AQA", year=2024, filename=None):
     """Build a detected-file dict shaped like paper_detection_files rows."""
     return {
         "id": fid, "status": "detected", "paper_type": paper_type,
         "exam_board": board, "exam_year": year,
-        "paper_number": paper_number, "tier": tier,
+        "paper_number": paper_number, "tier": tier, "filename": filename,
     }
+
+
+def test_year_from_filename():
+    f = upload._year_from_filename
+    assert f("Biology-AQA-84611F-QP-JUN22.PDF") == 2022
+    assert f("Biology-AQA-84611F-MS-JUN2022.PDF") == 2022     # 4-digit preferred
+    assert f("Chemistry-OCR-Paper2-NOV23.pdf") == 2023
+    assert f("Maths-Summer-24-Higher.pdf") == 2024
+    assert f("8461_2023_paper1.pdf") == 2023
+    assert f("no-year-here.pdf") is None
+    assert f(None) is None
+
+
+def test_compute_matches_pairs_when_qp_year_only_in_filename():
+    """Regression: QP cover omits the year (exam_year=None) but the filename says
+    JUN22; the MS cover states 2022. They must still pair via the filename year."""
+    files = [
+        _df(1, "question_paper", "Paper 1F", "Foundation",
+            year=None, filename="Biology-AQA-84611F-QP-JUN22.PDF"),
+        _df(2, "mark_scheme", "Paper 1", "Foundation",
+            year=2022, filename="Biology-AQA-84611F-MS-JUN22.PDF"),
+    ]
+    matches = upload._compute_matches(files)
+    paired = [m for m in matches if m["match_group"] is not None]
+    assert len(paired) == 1
+    assert paired[0]["qp_id"] == 1
+    assert paired[0]["ms_id"] == 2
+    assert paired[0]["exam_year"] == 2022    # filename-derived year surfaced for display
+
+
+def test_compute_matches_filename_year_keeps_years_separate():
+    """Filename-derived years must not collapse different years together."""
+    files = [
+        _df(1, "question_paper", "Paper 1", "Foundation",
+            year=None, filename="Bio-QP-JUN22.PDF"),
+        _df(2, "mark_scheme", "Paper 1", "Foundation",
+            year=2022, filename="Bio-MS-JUN22.PDF"),
+        _df(3, "question_paper", "Paper 1", "Foundation",
+            year=None, filename="Bio-QP-JUN23.PDF"),
+        _df(4, "mark_scheme", "Paper 1", "Foundation",
+            year=2023, filename="Bio-MS-JUN23.PDF"),
+    ]
+    matches = upload._compute_matches(files)
+    paired = [m for m in matches if m["match_group"] is not None]
+    by_qp = {m["qp_id"]: m["ms_id"] for m in paired}
+    assert by_qp[1] == 2     # 2022 QP -> 2022 MS
+    assert by_qp[3] == 4     # 2023 QP -> 2023 MS
 
 
 def test_compute_matches_pairs_qp_1F_with_ms_paper_1():
