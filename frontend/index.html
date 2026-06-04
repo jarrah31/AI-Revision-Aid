@@ -29,8 +29,11 @@
                        :class="$store.app.route==='home' ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
                        class="px-3 py-2 rounded-md text-sm transition">Home</a>
                     <a href="#upload"
-                       :class="['upload','processing','upload-history','review'].includes($store.app.route) ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
+                       :class="['upload','processing','review'].includes($store.app.route) ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
                        class="px-3 py-2 rounded-md text-sm transition">Upload</a>
+                    <a href="#upload-history"
+                       :class="$store.app.route==='upload-history' ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
+                       class="px-3 py-2 rounded-md text-sm transition">History</a>
                     <a href="#past-papers"
                        :class="$store.app.route==='past-papers' ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
                        class="px-3 py-2 rounded-md text-sm transition">Past Papers</a>
@@ -103,8 +106,11 @@
                    :class="$store.app.route==='home' ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
                    class="block px-3 py-2 rounded-md">Home</a>
                 <a href="#upload" @click="mobileOpen=false"
-                   :class="['upload','processing','upload-history','review'].includes($store.app.route) ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
+                   :class="['upload','processing','review'].includes($store.app.route) ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
                    class="block px-3 py-2 rounded-md">Upload</a>
+                <a href="#upload-history" @click="mobileOpen=false"
+                   :class="$store.app.route==='upload-history' ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
+                   class="block px-3 py-2 rounded-md">History</a>
                 <a href="#past-papers" @click="mobileOpen=false"
                    :class="$store.app.route==='past-papers' ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
                    class="block px-3 py-2 rounded-md">Past Papers</a>

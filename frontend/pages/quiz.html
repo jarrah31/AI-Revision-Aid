@@ -7,10 +7,12 @@
     selectedSubcategoryIds: [],   // multi-select
     subjectCategories: {},        // subject_id → [categories]
     categorySubcategories: {},    // category_id → [subcategories]
-    questionSources: [],          // [] = all; ['ai_generated'] or ['past_paper'] to restrict
+    questionSources: [],          // [] = all; subset of ['ai_generated','past_paper','blended']
     count: 20,
     selectedModes: [],       // [] = all modes (flashcard + mcq + typed)
     availableCount: null,
+    sources: [],             // provenance: uploads contributing to the current selection
+    showSources: false,      // provenance panel expanded?
     loadingSetup: true,
     startingQuiz: false,
 
@@ -52,12 +54,15 @@
             this.loadingSetup = false;
         }
         this.loadAvailableCount();
-        this.$watch('subjectId',            () => this.loadAvailableCount());
-        this.$watch('selectedCategoryIds',  () => this.loadAvailableCount());
-        this.$watch('selectedSubcategoryIds', () => this.loadAvailableCount());
+        this.loadSources();
+        this.$watch('subjectId',            () => { this.loadAvailableCount(); this.loadSources(); });
+        this.$watch('selectedCategoryIds',  () => { this.loadAvailableCount(); this.loadSources(); });
+        this.$watch('selectedSubcategoryIds', () => { this.loadAvailableCount(); this.loadSources(); });
         this.$watch('questionSources',      () => this.loadAvailableCount());
         this.$watch('questionSources', () => {
-            if (this.questionSources.length === 1 && this.questionSources[0] === 'past_paper') {
+            // MCQ distractors only exist for AI-generated KO questions; drop the
+            // mode when the selection has no KO source (past-paper / blended only).
+            if (this.noAiSources()) {
                 this.selectedModes = this.selectedModes.filter(m => m !== 'mcq');
             }
         });
@@ -87,10 +92,46 @@
             {id: 'mcq',       label: 'Multiple Choice'},
             {id: 'typed',     label: 'Type Answer'},
         ];
-        // Past papers never have AI MCQ distractors — drop the MCQ mode when the
-        // user has restricted the quiz to Past Paper questions only.
-        const pastPaperOnly = this.questionSources.length === 1 && this.questionSources[0] === 'past_paper';
-        return pastPaperOnly ? all.filter(m => m.id !== 'mcq') : all;
+        // Past-paper / blended questions never have AI MCQ distractors — drop the
+        // MCQ mode when the selection contains no Knowledge Organiser source.
+        return this.noAiSources() ? all.filter(m => m.id !== 'mcq') : all;
+    },
+
+    // True when the source selection is non-empty and excludes pure KO questions.
+    noAiSources() {
+        return this.questionSources.length > 0 && !this.questionSources.includes('ai_generated');
+    },
+
+    sourceLabel(id) {
+        return {
+            ai_generated: 'Knowledge Organiser',
+            past_paper:   'Past Paper',
+            blended:      'Blended',
+        }[id] || id;
+    },
+
+    sourceIcon(s) {
+        return s.batch_type === 'past_paper' ? '📄' : '📚';
+    },
+
+    sourceCountLabel(s) {
+        if (s.batch_type === 'knowledge_organiser' && s.past_paper_count > 0) {
+            return `${s.question_count} questions · ${s.past_paper_count} blended`;
+        }
+        return `${s.question_count} question${s.question_count !== 1 ? 's' : ''}`;
+    },
+
+    loadSources() {
+        clearTimeout(this._sourcesTimer);
+        this._sourcesTimer = setTimeout(async () => {
+            const params = new URLSearchParams();
+            if (this.subjectId) params.set('subject_id', this.subjectId);
+            this.selectedCategoryIds.forEach(id => params.append('category_ids', id));
+            this.selectedSubcategoryIds.forEach(id => params.append('subcategory_ids', id));
+            try {
+                this.sources = await API.get('/quiz/sources?' + params.toString());
+            } catch (e) { this.sources = []; }
+        }, 200);
     },
 
     async selectSubject(id) {
@@ -241,6 +282,14 @@
         return parts.join(' ');
     },
 
+    // Source badge for a saved/in-progress quiz session.
+    sessionSourceLabel(s) {
+        const srcs = s.questionSources || [];
+        if (srcs.length === 0) return '📚📄 All Sources';
+        const map = {ai_generated: '📚 KO', past_paper: '📄 Past Paper', blended: '🔗 Blended'};
+        return srcs.map(x => map[x] || x).join(', ');
+    },
+
     async quitQuiz() {
         // Progress is already persisted after each question — just return to setup
         this.sessionId = null;
@@ -257,7 +306,7 @@
                 subject_id: this.subjectId || null,
                 category_ids: this.selectedCategoryIds.length > 0 ? this.selectedCategoryIds : null,
                 subcategory_ids: this.selectedSubcategoryIds.length > 0 ? this.selectedSubcategoryIds : null,
-                question_sources: this.questionSources.length === 1 ? this.questionSources : null,
+                question_sources: this.questionSources.length > 0 ? this.questionSources : null,
                 count: this.count,
                 modes: this.selectedModes.length > 0 ? this.selectedModes : null,
             });
@@ -514,7 +563,8 @@
                     <div class="flex flex-wrap gap-2">
                         <template x-for="src in [
                             {id: 'ai_generated', label: '📚 Knowledge Organiser'},
-                            {id: 'past_paper',   label: '📄 Past Paper'}
+                            {id: 'past_paper',   label: '📄 Past Paper'},
+                            {id: 'blended',      label: '🔗 Blended'}
                         ]" :key="src.id">
                             <button @click="questionSources.includes(src.id)
                                         ? questionSources = questionSources.filter(s => s !== src.id)
@@ -527,11 +577,36 @@
                             </button>
                         </template>
                     </div>
-                    <p class="text-xs text-gray-400 mt-1.5" x-show="questionSources.length === 1">
-                        <span x-text="questionSources[0] === 'ai_generated'
-                            ? 'Knowledge Organiser questions only'
-                            : 'Past Paper questions only'"></span>
+                    <p class="text-xs text-gray-400 mt-1.5">
+                        <span x-show="questionSources.length === 0">All sources included.</span>
+                        <span x-show="questionSources.length > 0"
+                              x-text="'Only: ' + questionSources.map(sourceLabel).join(' + ')"></span>
+                        <span x-show="questionSources.includes('blended')" class="block">
+                            🔗 Blended = exam questions matched to your Knowledge Organiser.
+                        </span>
                     </p>
+                </div>
+
+                <!-- Question provenance (#where do these questions come from?) -->
+                <div x-show="sources.length > 0">
+                    <button type="button" @click="showSources = !showSources"
+                            class="flex items-center gap-1 text-sm font-medium text-gray-700">
+                        <span x-text="showSources ? '▾' : '▸'"></span>
+                        Questions come from
+                        <span class="text-gray-400 font-normal" x-text="'(' + sources.length + ' upload' + (sources.length !== 1 ? 's' : '') + ')'"></span>
+                    </button>
+                    <div x-show="showSources"
+                         class="mt-2 border border-gray-100 rounded-lg divide-y divide-gray-50 max-h-48 overflow-y-auto">
+                        <template x-for="s in sources" :key="s.batch_id">
+                            <div class="flex items-center justify-between gap-3 px-3 py-1.5 text-xs">
+                                <span class="min-w-0 flex items-center gap-1.5">
+                                    <span x-text="sourceIcon(s)"></span>
+                                    <span class="font-mono text-gray-600 truncate" :title="s.filename" x-text="s.filename"></span>
+                                </span>
+                                <span class="text-gray-400 whitespace-nowrap" x-text="sourceCountLabel(s)"></span>
+                            </div>
+                        </template>
+                    </div>
                 </div>
 
                 <div>
@@ -626,9 +701,7 @@
                                   x-text="sessionModeLabel(sq)">
                             </span>
                             <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500"
-                                  x-text="sq.questionSources?.length === 1
-                                      ? (sq.questionSources[0] === 'ai_generated' ? '📚 KO Only' : '📄 Past Paper Only')
-                                      : '📚📄 All Sources'">
+                                  x-text="sessionSourceLabel(sq)">
                             </span>
                         </div>
                         <!-- Progress -->

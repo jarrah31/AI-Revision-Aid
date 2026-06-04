@@ -489,3 +489,95 @@ def test_resume_preserves_multi_response(
     assert q["multi_response"] is not None
     assert q["multi_response"]["select_count"] == 2
     assert all("is_correct" not in o for o in q["multi_response"]["options"])
+
+
+# ── Three-bucket question-source filter (KO / Past Paper / Blended) ───────────
+
+def _set_batch_type(db, batch_id, t):
+    db.execute("UPDATE upload_batches SET batch_type = ? WHERE id = ?", (t, batch_id))
+    db.commit()
+
+
+def _blend_fixture(db, uid, sid, make_batch, make_question):
+    """KO batch with 2 pure-AI + 1 blended (past_paper-in-KO) question, plus a
+    standalone past-paper batch with 2 past_paper questions. Returns the KO batch id."""
+    ko = make_batch(uid, sid, filename="booklet.pdf")          # default type = knowledge_organiser
+    make_question(ko, uid, sid, question_text="KO 1", question_source="ai_generated")
+    make_question(ko, uid, sid, question_text="KO 2", question_source="ai_generated")
+    make_question(ko, uid, sid, question_text="blended exam", question_source="past_paper")
+
+    pp = make_batch(uid, sid, filename="exam.pdf")
+    _set_batch_type(db, pp, "past_paper")
+    make_question(pp, uid, sid, question_text="standalone 1", question_source="past_paper")
+    make_question(pp, uid, sid, question_text="standalone 2", question_source="past_paper")
+    return ko, pp
+
+
+def test_count_source_buckets_are_distinct(
+    client, user_headers, regular_user, make_subject, make_batch, make_question, db_conn
+):
+    uid, _ = regular_user
+    sid = make_subject()
+    _blend_fixture(db_conn, uid, sid, make_batch, make_question)
+
+    def count(*sources):
+        qs = "".join(f"&question_sources={s}" for s in sources)
+        r = client.get(f"/api/quiz/count?subject_id={sid}{qs}", headers=user_headers)
+        assert r.status_code == 200
+        return r.json()["count"]
+
+    assert count() == 5                                  # no filter = everything
+    assert count("ai_generated") == 2                    # pure KO
+    assert count("past_paper") == 2                      # standalone only (NOT blended)
+    assert count("blended") == 1                         # exam-in-KO only
+    assert count("past_paper", "blended") == 3           # all exam questions
+    assert count("ai_generated", "blended") == 3
+
+
+def test_start_quiz_blended_only(
+    client, user_headers, regular_user, make_subject, make_batch, make_question, db_conn
+):
+    uid, _ = regular_user
+    sid = make_subject()
+    _blend_fixture(db_conn, uid, sid, make_batch, make_question)
+
+    r = client.post("/api/quiz/start",
+                    json={"subject_id": sid, "question_sources": ["blended"], "count": 20},
+                    headers=user_headers)
+    assert r.status_code == 200
+    qs = r.json()["questions"]
+    assert len(qs) == 1
+    assert qs[0]["question_text"] == "blended exam"
+
+
+def test_sources_endpoint_lists_provenance(
+    client, user_headers, regular_user, make_subject, make_batch, make_question, db_conn
+):
+    uid, _ = regular_user
+    sid = make_subject()
+    ko, pp = _blend_fixture(db_conn, uid, sid, make_batch, make_question)
+
+    r = client.get(f"/api/quiz/sources?subject_id={sid}", headers=user_headers)
+    assert r.status_code == 200
+    by_id = {row["batch_id"]: row for row in r.json()}
+
+    assert by_id[ko]["batch_type"] == "knowledge_organiser"
+    assert by_id[ko]["question_count"] == 3
+    assert by_id[ko]["past_paper_count"] == 1            # the blended one
+    assert by_id[pp]["batch_type"] == "past_paper"
+    assert by_id[pp]["question_count"] == 2
+    assert by_id[pp]["past_paper_count"] == 2
+
+
+def test_sources_endpoint_excludes_unapproved(
+    client, user_headers, regular_user, make_subject, make_batch, make_question, db_conn
+):
+    uid, _ = regular_user
+    sid = make_subject()
+    b = make_batch(uid, sid)
+    make_question(b, uid, sid, approved=1)
+    make_question(b, uid, sid, approved=0)              # should not be counted
+
+    r = client.get(f"/api/quiz/sources?subject_id={sid}", headers=user_headers)
+    assert r.status_code == 200
+    assert r.json()[0]["question_count"] == 1

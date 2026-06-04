@@ -101,6 +101,40 @@ def _cat_subcat_filter(category_ids: list[int] | None, subcategory_ids: list[int
     return sql, subs + cats + subs
 
 
+def _source_filter(sources: list[str] | None):
+    """Return (sql_fragment, params) translating logical question sources into a
+    WHERE clause. Three mutually-exclusive buckets:
+
+      'ai_generated' — pure Knowledge Organiser questions (AI-generated).
+      'past_paper'   — standalone past-paper questions (live in past_paper batches).
+      'blended'      — exam questions matched into a KO (question_source='past_paper'
+                       but living inside a knowledge_organiser batch).
+
+    The split matters because a blended question carries question_source='past_paper',
+    so without the batch_type check 'Past Paper' and 'Blended' would overlap. Empty/None
+    selection means no filter (all sources). Returns (None, []) when no filter applies.
+    """
+    if not sources:
+        return None, []
+    clauses = []
+    for s in sources:
+        if s == "ai_generated":
+            clauses.append("q.question_source = 'ai_generated'")
+        elif s == "past_paper":
+            clauses.append(
+                "(q.question_source = 'past_paper' AND q.batch_id IN "
+                "(SELECT id FROM upload_batches WHERE batch_type = 'past_paper'))"
+            )
+        elif s == "blended":
+            clauses.append(
+                "(q.question_source = 'past_paper' AND q.batch_id IN "
+                "(SELECT id FROM upload_batches WHERE batch_type = 'knowledge_organiser'))"
+            )
+    if not clauses:
+        return None, []
+    return "(" + " OR ".join(clauses) + ")", []
+
+
 @router.get("/count")
 def get_question_count(
     subject_id: int | None = Query(None),
@@ -120,13 +154,48 @@ def get_question_count(
     if cat_filter:
         conditions.append(cat_filter)
         params.extend(cat_params)
-    if question_sources:
-        placeholders = ",".join("?" * len(question_sources))
-        conditions.append(f"q.question_source IN ({placeholders})")
-        params.extend(question_sources)
+    src_filter, src_params = _source_filter(question_sources)
+    if src_filter:
+        conditions.append(src_filter)
+        params.extend(src_params)
     where = " AND ".join(conditions)
     row = db.execute(f"SELECT COUNT(*) FROM questions q WHERE {where}", params).fetchone()
     return {"count": row[0]}
+
+
+@router.get("/sources")
+def get_question_provenance(
+    subject_id: int | None = Query(None),
+    category_ids: list[int] | None = Query(None),
+    subcategory_ids: list[int] | None = Query(None),
+    user: dict = Depends(get_current_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """List the uploads contributing approved questions to the current selection,
+    so the quiz setup can show where the question pool comes from. Each entry is
+    one upload batch with its question counts (and how many are exam questions)."""
+    conditions = ["q.user_id = ?", "q.approved = 1"]
+    params: list = [user["id"]]
+    if subject_id:
+        conditions.append("q.subject_id = ?")
+        params.append(subject_id)
+    cat_filter, cat_params = _cat_subcat_filter(category_ids, subcategory_ids)
+    if cat_filter:
+        conditions.append(cat_filter)
+        params.extend(cat_params)
+    where = " AND ".join(conditions)
+    rows = db.execute(
+        f"""SELECT b.id as batch_id, b.filename, b.batch_type,
+                   COUNT(*) as question_count,
+                   SUM(CASE WHEN q.question_source = 'past_paper' THEN 1 ELSE 0 END) as past_paper_count
+            FROM questions q
+            JOIN upload_batches b ON b.id = q.batch_id
+            WHERE {where}
+            GROUP BY b.id
+            ORDER BY b.batch_type ASC, b.filename ASC""",
+        params,
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 @router.get("/in-progress")
@@ -168,10 +237,10 @@ def start_quiz(
     if cat_filter:
         conditions.append(cat_filter)
         params.extend(cat_params)
-    if req.question_sources:
-        placeholders = ",".join("?" * len(req.question_sources))
-        conditions.append(f"q.question_source IN ({placeholders})")
-        params.extend(req.question_sources)
+    src_filter, src_params = _source_filter(req.question_sources)
+    if src_filter:
+        conditions.append(src_filter)
+        params.extend(src_params)
     where = " AND ".join(conditions)
 
     # 1. Overdue cards
