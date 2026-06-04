@@ -405,13 +405,13 @@ Alpine.data('reviewPage', () => ({
                  class="mb-4 p-3 rounded-lg bg-indigo-50 border border-indigo-100">
                 <div class="text-sm text-indigo-900">
                     <span class="font-semibold"
-                          x-text="coverage.past_paper + ' of ' + coverage.total + ' questions (' + Math.round((coverage.past_paper / coverage.total) * 100) + '%) matched to real past papers'"></span>
+                          x-text="coverage?.past_paper + ' of ' + coverage?.total + ' questions (' + Math.round((coverage?.past_paper / coverage?.total) * 100) + '%) matched to real past papers'"></span>
                     <span class="text-indigo-700"
-                          x-text="' · ' + coverage.ai_generated + ' AI-generated'"></span>
+                          x-text="' · ' + coverage?.ai_generated + ' AI-generated'"></span>
                 </div>
-                <div x-show="coverage.by_paper && coverage.by_paper.length > 0"
+                <div x-show="coverage?.by_paper && coverage.by_paper.length > 0"
                      class="mt-1 text-xs text-indigo-700 flex flex-wrap gap-x-3 gap-y-0.5">
-                    <template x-for="bp in coverage.by_paper" :key="bp.source">
+                    <template x-for="bp in (coverage?.by_paper || [])" :key="bp.source">
                         <span x-text="bp.source + ': ' + bp.count"></span>
                     </template>
                 </div>
