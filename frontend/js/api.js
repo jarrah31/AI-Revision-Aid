@@ -33,7 +33,7 @@ const API = {
         return user && user.is_admin;
     },
 
-    async request(method, path, body = null) {
+    async request(method, path, body = null, signal = null) {
         const headers = { 'Content-Type': 'application/json' };
         const token = this.getToken();
         if (token) {
@@ -43,6 +43,9 @@ const API = {
         const opts = { method, headers };
         if (body && method !== 'GET') {
             opts.body = JSON.stringify(body);
+        }
+        if (signal) {
+            opts.signal = signal;
         }
 
         const res = await fetch(`${this.baseUrl}${path}`, opts);
@@ -63,7 +66,7 @@ const API = {
     },
 
     get(path) { return this.request('GET', path); },
-    post(path, body) { return this.request('POST', path, body); },
+    post(path, body, signal) { return this.request('POST', path, body, signal); },
     put(path, body) { return this.request('PUT', path, body); },
     del(path) { return this.request('DELETE', path); },
 

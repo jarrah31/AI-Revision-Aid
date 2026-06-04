@@ -513,7 +513,7 @@ def _blend_fixture(db, uid, sid, make_batch, make_question):
     return ko, pp
 
 
-def test_count_source_buckets_are_distinct(
+def test_count_source_buckets(
     client, user_headers, regular_user, make_subject, make_batch, make_question, db_conn
 ):
     uid, _ = regular_user
@@ -527,14 +527,31 @@ def test_count_source_buckets_are_distinct(
         return r.json()["count"]
 
     assert count() == 5                                  # no filter = everything
-    assert count("ai_generated") == 2                    # pure KO
+    assert count("ai_generated") == 2                    # pure KO (AI) questions
     assert count("past_paper") == 2                      # standalone only (NOT blended)
-    assert count("blended") == 1                         # exam-in-KO only
-    assert count("past_paper", "blended") == 3           # all exam questions
-    assert count("ai_generated", "blended") == 3
+    # Blended = the whole blended KO booklet: 2 AI (uncovered) + 1 exam = 3.
+    assert count("blended") == 3
+    assert count("past_paper", "blended") == 5           # standalone + whole booklet
+    assert count("ai_generated", "blended") == 3         # AI is a subset of the booklet
 
 
-def test_start_quiz_blended_only(
+def test_blended_excludes_unblended_ko_batches(
+    client, user_headers, regular_user, make_subject, make_batch, make_question, db_conn
+):
+    """A KO booklet with NO matched exam questions is not 'blended'."""
+    uid, _ = regular_user
+    sid = make_subject()
+    plain_ko = make_batch(uid, sid, filename="plain.pdf")     # KO, never blended
+    make_question(plain_ko, uid, sid, question_source="ai_generated")
+    make_question(plain_ko, uid, sid, question_source="ai_generated")
+
+    r = client.get(f"/api/quiz/count?subject_id={sid}&question_sources=blended",
+                   headers=user_headers)
+    assert r.status_code == 200
+    assert r.json()["count"] == 0
+
+
+def test_start_quiz_blended_includes_ai_and_exam(
     client, user_headers, regular_user, make_subject, make_batch, make_question, db_conn
 ):
     uid, _ = regular_user
@@ -545,9 +562,10 @@ def test_start_quiz_blended_only(
                     json={"subject_id": sid, "question_sources": ["blended"], "count": 20},
                     headers=user_headers)
     assert r.status_code == 200
-    qs = r.json()["questions"]
-    assert len(qs) == 1
-    assert qs[0]["question_text"] == "blended exam"
+    texts = {q["question_text"] for q in r.json()["questions"]}
+    # The booklet's exam match AND its uncovered-knowledge AI questions, but NOT
+    # the standalone past papers.
+    assert texts == {"blended exam", "KO 1", "KO 2"}
 
 
 def test_sources_endpoint_lists_provenance(

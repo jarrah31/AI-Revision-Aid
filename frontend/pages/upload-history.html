@@ -6,7 +6,9 @@ Alpine.data('uploadHistoryPage', () => ({
     expanded: {},      // batch_id -> bool
     breakdowns: {},    // batch_id -> {breakdown:[...], total_cost_usd, ...}
     bdLoading: {},     // batch_id -> bool
-    reblending: {},    // batch_id -> bool
+    // Regenerate-blend modal: phase ∈ 'confirm' | 'running' | 'done' | 'error'
+    reblendModal: { open: false, batch: null, phase: 'confirm', result: null, error: null, hadBlend: false },
+    _reblendAbort: null,
 
     async init() {
         try {
@@ -23,46 +25,53 @@ Alpine.data('uploadHistoryPage', () => ({
         return b.batch_type === 'knowledge_organiser' && b.status === 'completed';
     },
 
-    // Wrapped in a method with a strict === true check: reading a missing key on
-    // the Alpine reactive `reblending` proxy inside x-for returns a truthy proxy,
-    // not undefined (see CLAUDE.md), which would wrongly disable every button.
-    isReblending(b) {
-        return this.reblending[b.id] === true;
+    openReblend(b) {
+        this.reblendModal = {
+            open: true, batch: b, phase: 'confirm', result: null, error: null,
+            hadBlend: (b.past_paper_count || 0) > 0,
+        };
     },
 
-    async reblend(b) {
-        if (this.reblending[b.id]) return;
-        const hadBlend = (b.past_paper_count || 0) > 0;
-        const msg = 'Regenerate the past-paper blend for "' + b.filename + '"?\n\n'
-            + 'This re-matches every Knowledge Organiser point against ALL past papers '
-            + 'currently in this subject, so it makes one paid AI matching call.'
-            + (hadBlend
-                ? '\n\nNote: questions blended before this feature existed can’t be '
-                  + 're-matched (their original wording wasn’t saved) — they’ll be '
-                  + 'kept as-is while the rest are re-matched. Re-upload the booklet for a '
-                  + '100% clean slate.'
-                : '');
-        if (!confirm(msg)) return;
-
-        this.reblending[b.id] = true;
+    async confirmReblend() {
+        const b = this.reblendModal.batch;
+        this.reblendModal.phase = 'running';
+        this.reblendModal.error = null;
+        this._reblendAbort = new AbortController();
         try {
-            const r = await API.post('/upload/' + b.id + '/reblend', {});
-            const matched = (r.replaced || 0) + (r.inserted || 0);
-            $store.app.showToast(
-                matched > 0
-                    ? `Blend regenerated: ${matched} exam question${matched !== 1 ? 's' : ''} matched (${this.fmt(r.cost_usd || 0)})`
-                    : `No new matches found (${this.fmt(r.cost_usd || 0)})`,
-                'success');
-            // Refresh so question/blend counts and cost reflect the new state.
-            this.batches = await API.get('/costs/history');
-            this.totalCost = this.batches.reduce((s, x) => s + (x.cost_usd || 0), 0);
-            delete this.breakdowns[b.id];   // stale; will re-fetch on expand
+            const r = await API.post('/upload/' + b.id + '/reblend', {}, this._reblendAbort.signal);
+            this.reblendModal.result = r;
+            this.reblendModal.phase = 'done';
         } catch (e) {
-            $store.app.showToast('Regenerate failed: ' + (e.message || 'unknown error'), 'error');
+            if (e.name === 'AbortError') {
+                // Cancelled client-side. The server call may still complete, so a
+                // refresh ensures we show whatever final state it reached.
+                this.reblendModal.open = false;
+                $store.app.showToast('Regeneration cancelled — refreshing in case it finished.', 'info');
+                setTimeout(() => location.reload(), 800);
+                return;
+            }
+            this.reblendModal.error = e.message || 'Unknown error';
+            this.reblendModal.phase = 'error';
         } finally {
-            this.reblending[b.id] = false;
+            this._reblendAbort = null;
         }
     },
+
+    stopReblend() {
+        if (this._reblendAbort) this._reblendAbort.abort();
+    },
+
+    closeReblend() {
+        if (this.reblendModal.phase === 'running') return;   // only Stop can exit a run
+        const refresh = this.reblendModal.phase === 'done';
+        this.reblendModal.open = false;
+        if (refresh) location.reload();   // guarantees the page shows the new state
+    },
+
+    // Summary helpers for the 'done' panel.
+    reblendMatched()   { return this.reblendModal.result?.replaced || 0; },
+    reblendTotalExam() { const r = this.reblendModal.result || {}; return (r.replaced || 0) + (r.inserted || 0); },
+    reblendCleared()   { const r = this.reblendModal.result || {}; return (r.restored || 0) + (r.deleted || 0); },
 
     async toggleBreakdown(b) {
         const id = b.id;
@@ -268,10 +277,9 @@ Alpine.data('uploadHistoryPage', () => ({
                                 Source PDF
                             </a>
                             <button x-show="canReblend(b)"
-                                    @click="reblend(b)"
-                                    :disabled="isReblending(b)"
-                                    class="text-xs text-emerald-700 hover:underline whitespace-nowrap disabled:text-gray-400 disabled:no-underline disabled:cursor-wait text-left sm:text-right">
-                                <span x-text="isReblending(b) ? 'Regenerating…' : '🔄 Regenerate blend'"></span>
+                                    @click="openReblend(b)"
+                                    class="text-xs text-emerald-700 hover:underline whitespace-nowrap text-left sm:text-right">
+                                🔄 Regenerate blend
                             </button>
                         </div>
                     </div>
@@ -332,4 +340,106 @@ Alpine.data('uploadHistoryPage', () => ({
         Pricing: $3.00 / 1M input tokens · $15.00 / 1M output tokens (Claude Sonnet).
         Costs shown in GBP (<span x-text="'$1 = £' + $store.app.gbpRate.toFixed(4)"></span><span x-show="$store.app.gbpRateDate">, rate date: <span x-text="$store.app.gbpRateDate"></span></span>).
     </p>
+
+    <!-- ── Regenerate-blend modal (stays put; backdrop click does nothing) ──── -->
+    <div x-show="reblendModal.open" style="display:none"
+         class="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <!-- Backdrop: deliberately has no @click handler so the dialog can't be dismissed by clicking out. -->
+        <div class="absolute inset-0 bg-gray-900/50"></div>
+
+        <div class="relative bg-white rounded-2xl shadow-xl border border-gray-100 w-full max-w-md p-6">
+
+            <!-- CONFIRM -->
+            <template x-if="reblendModal.phase === 'confirm'">
+                <div>
+                    <div class="flex items-center gap-3 mb-3">
+                        <div class="w-10 h-10 rounded-full bg-emerald-50 flex items-center justify-center text-xl">🔄</div>
+                        <h3 class="text-lg font-bold text-gray-800">Regenerate blend</h3>
+                    </div>
+                    <p class="text-sm text-gray-600 mb-2">
+                        Re-match every Knowledge Organiser point in
+                        <span class="font-medium text-gray-800" x-text="reblendModal.batch?.filename"></span>
+                        against <span class="font-medium">all past papers</span> currently in this subject.
+                    </p>
+                    <p class="text-sm text-gray-600 mb-3">This makes <span class="font-medium">one paid AI matching call</span>.</p>
+                    <p x-show="reblendModal.hadBlend"
+                       class="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-lg p-2.5 mb-4">
+                        Questions blended before this feature can’t be re-matched (their original wording wasn’t
+                        saved) — they’ll be kept while the rest are re-matched. Re-upload the booklet for a 100% clean slate.
+                    </p>
+                    <div class="flex justify-end gap-2">
+                        <button @click="closeReblend()"
+                                class="px-4 py-2 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100 transition">Cancel</button>
+                        <button @click="confirmReblend()"
+                                class="px-4 py-2 rounded-lg text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700 transition">Regenerate</button>
+                    </div>
+                </div>
+            </template>
+
+            <!-- RUNNING -->
+            <template x-if="reblendModal.phase === 'running'">
+                <div class="text-center py-2">
+                    <svg class="animate-spin w-10 h-10 text-emerald-600 mx-auto mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                    </svg>
+                    <h3 class="text-lg font-bold text-gray-800 mb-1">Regenerating blend…</h3>
+                    <p class="text-sm text-gray-500 mb-5">
+                        Matching <span class="font-medium" x-text="reblendModal.batch?.filename"></span>
+                        against your past papers. This can take a few moments — please keep this open.
+                    </p>
+                    <button @click="stopReblend()"
+                            class="px-4 py-2 rounded-lg text-sm font-medium bg-red-50 text-red-600 hover:bg-red-100 transition">✕ Stop</button>
+                </div>
+            </template>
+
+            <!-- DONE -->
+            <template x-if="reblendModal.phase === 'done'">
+                <div>
+                    <div class="flex items-center gap-3 mb-4">
+                        <div class="w-10 h-10 rounded-full bg-emerald-50 flex items-center justify-center text-xl">✅</div>
+                        <h3 class="text-lg font-bold text-gray-800">Blend regenerated</h3>
+                    </div>
+                    <div class="space-y-2 text-sm mb-2">
+                        <div class="flex justify-between gap-3">
+                            <span class="text-gray-500">Knowledge points matched to exam questions</span>
+                            <span class="font-semibold text-gray-800" x-text="reblendMatched()"></span>
+                        </div>
+                        <div class="flex justify-between gap-3">
+                            <span class="text-gray-500">Exam questions added in total</span>
+                            <span class="font-semibold text-gray-800" x-text="reblendTotalExam()"></span>
+                        </div>
+                        <div class="flex justify-between gap-3" x-show="reblendCleared() > 0">
+                            <span class="text-gray-500">Previous blend items cleared &amp; re-matched</span>
+                            <span class="font-semibold text-gray-800" x-text="reblendCleared()"></span>
+                        </div>
+                        <div class="flex justify-between gap-3 border-t border-gray-100 pt-2 mt-2">
+                            <span class="text-gray-500">AI cost for this regeneration</span>
+                            <span class="font-bold text-indigo-600" x-text="fmt(reblendModal.result?.cost_usd || 0)"></span>
+                        </div>
+                    </div>
+                    <p x-show="reblendMatched() === 0" class="text-xs text-gray-400 mb-2">No new exam matches were found this time.</p>
+                    <div class="flex justify-end mt-4">
+                        <button @click="closeReblend()"
+                                class="px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700 transition">Done &amp; refresh</button>
+                    </div>
+                </div>
+            </template>
+
+            <!-- ERROR -->
+            <template x-if="reblendModal.phase === 'error'">
+                <div>
+                    <div class="flex items-center gap-3 mb-3">
+                        <div class="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center text-xl">⚠️</div>
+                        <h3 class="text-lg font-bold text-gray-800">Regenerate failed</h3>
+                    </div>
+                    <p class="text-sm text-red-600 mb-4" x-text="reblendModal.error"></p>
+                    <div class="flex justify-end">
+                        <button @click="closeReblend()"
+                                class="px-4 py-2 rounded-lg text-sm font-medium bg-gray-100 text-gray-700 hover:bg-gray-200 transition">Close</button>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </div>
 </div>

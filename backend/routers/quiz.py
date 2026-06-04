@@ -103,16 +103,18 @@ def _cat_subcat_filter(category_ids: list[int] | None, subcategory_ids: list[int
 
 def _source_filter(sources: list[str] | None):
     """Return (sql_fragment, params) translating logical question sources into a
-    WHERE clause. Three mutually-exclusive buckets:
+    WHERE clause. Three buckets:
 
       'ai_generated' — pure Knowledge Organiser questions (AI-generated).
       'past_paper'   — standalone past-paper questions (live in past_paper batches).
-      'blended'      — exam questions matched into a KO (question_source='past_paper'
-                       but living inside a knowledge_organiser batch).
+      'blended'      — the FULL contents of a KO booklet that has been blended: the
+                       matched exam questions PLUS the AI questions covering knowledge
+                       that no exam question matched. (i.e. every question in a KO
+                       batch that has at least one matched exam question.)
 
-    The split matters because a blended question carries question_source='past_paper',
-    so without the batch_type check 'Past Paper' and 'Blended' would overlap. Empty/None
-    selection means no filter (all sources). Returns (None, []) when no filter applies.
+    'blended' deliberately overlaps 'ai_generated' — these are study modes, not a
+    strict partition. Empty/None selection means no filter (all sources). Returns
+    (None, []) when no filter applies.
     """
     if not sources:
         return None, []
@@ -126,9 +128,13 @@ def _source_filter(sources: list[str] | None):
                 "(SELECT id FROM upload_batches WHERE batch_type = 'past_paper'))"
             )
         elif s == "blended":
+            # The full contents of any KO booklet that has been blended: matched
+            # exam questions PLUS the AI questions covering knowledge no exam matched.
             clauses.append(
-                "(q.question_source = 'past_paper' AND q.batch_id IN "
-                "(SELECT id FROM upload_batches WHERE batch_type = 'knowledge_organiser'))"
+                "q.batch_id IN (SELECT b.id FROM upload_batches b "
+                "WHERE b.batch_type = 'knowledge_organiser' AND EXISTS "
+                "(SELECT 1 FROM questions q2 WHERE q2.batch_id = b.id "
+                "AND q2.question_source = 'past_paper'))"
             )
     if not clauses:
         return None, []
