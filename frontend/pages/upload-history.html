@@ -133,6 +133,15 @@ Alpine.data('uploadHistoryPage', () => ({
                             &middot; Pages <span x-text="b.page_start"></span>–<span x-text="b.page_end"></span>
                             &middot; <span x-text="b.question_count"></span> questions
                             (<span x-text="b.approved_count"></span> approved)
+                            <template x-if="b.batch_type === 'knowledge_organiser'">
+                                <span>
+                                    <span x-show="b.past_paper_count > 0"
+                                          class="ml-2 text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 whitespace-nowrap"
+                                          x-text="'📄 ' + b.past_paper_count + '/' + b.question_count + ' from past papers'"></span>
+                                    <span x-show="!b.past_paper_count"
+                                          class="ml-2 text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 whitespace-nowrap">All AI-generated</span>
+                                </span>
+                            </template>
                             &middot; <span x-text="new Date(b.created_at).toLocaleDateString()"></span>
                         </p>
                         <!-- Options chips -->
