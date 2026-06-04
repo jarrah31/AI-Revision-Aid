@@ -1,5 +1,5 @@
 import sqlite3
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from backend.auth import get_current_user
 from backend.database import get_db
@@ -68,6 +68,49 @@ def get_cost_summary(
     }
 
 
+@router.get("/batch/{batch_id}")
+def get_batch_cost_breakdown(
+    batch_id: int,
+    user: dict = Depends(get_current_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Per-process cost breakdown for a single upload batch.
+
+    Groups the batch's api_usage rows by (call_type, model) so the UI can show
+    which model ran each processing step and what it cost. 404 if the batch is
+    not owned by the caller.
+    """
+    owned = db.execute(
+        "SELECT id FROM upload_batches WHERE id = ? AND user_id = ?",
+        (batch_id, user["id"]),
+    ).fetchone()
+    if owned is None:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    rows = db.execute(
+        """SELECT call_type,
+                  COALESCE(NULLIF(TRIM(model), ''), 'unknown') as model,
+                  COUNT(*) as call_count,
+                  SUM(input_tokens) as input_tokens,
+                  SUM(output_tokens) as output_tokens,
+                  SUM(cost_usd) as cost_usd
+           FROM api_usage
+           WHERE batch_id = ?
+           GROUP BY call_type, model
+           ORDER BY cost_usd DESC, call_type ASC""",
+        (batch_id,),
+    ).fetchall()
+
+    breakdown = [dict(r) for r in rows]
+    return {
+        "batch_id": batch_id,
+        "total_cost_usd": sum(r["cost_usd"] or 0 for r in breakdown),
+        "total_input_tokens": sum(r["input_tokens"] or 0 for r in breakdown),
+        "total_output_tokens": sum(r["output_tokens"] or 0 for r in breakdown),
+        "breakdown": breakdown,
+    }
+
+
 @router.get("/history")
 def get_cost_history(
     user: dict = Depends(get_current_user),
@@ -76,7 +119,11 @@ def get_cost_history(
     """Return per-batch upload history with cost data."""
     batches = db.execute(
         """SELECT b.id, b.filename, b.page_start, b.page_end, b.total_pages,
-                  b.processed_pages, b.status, b.is_shared, b.cost_usd,
+                  b.processed_pages, b.status, b.is_shared,
+                  -- Derive cost from api_usage (the source of truth) rather than the
+                  -- incrementally-maintained b.cost_usd cache, so the headline always
+                  -- matches the per-process breakdown.
+                  (SELECT COALESCE(SUM(au.cost_usd), 0) FROM api_usage au WHERE au.batch_id = b.id) as cost_usd,
                   b.created_at, b.completed_at, b.error_message,
                   b.batch_type, b.source_type, b.is_handwritten, b.tier,
                   s.name as subject_name,

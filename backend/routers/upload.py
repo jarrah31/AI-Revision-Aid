@@ -162,13 +162,28 @@ def _match_and_replace_with_past_papers(
         return  # No past papers uploaded yet — graceful no-op
 
     try:
-        matches = match_ko_to_past_papers(
+        matches, match_usage = match_ko_to_past_papers(
             [dict(q) for q in ko_questions],
             [dict(q) for q in past_paper_qs],
         )
     except Exception as e:
         print(f"[match_ko_to_past_papers] matching failed: {e}")
         return
+
+    # Record the matching cost against the batch (the call happened regardless
+    # of whether any matches were found).
+    db.execute(
+        """INSERT INTO api_usage
+           (user_id, batch_id, call_type, input_tokens, output_tokens, cost_usd, model)
+           VALUES (?, ?, 'ko_matching', ?, ?, ?, ?)""",
+        (user_id, batch_id, match_usage["input_tokens"], match_usage["output_tokens"],
+         match_usage["cost_usd"], match_usage.get("model")),
+    )
+    db.execute(
+        "UPDATE upload_batches SET cost_usd = cost_usd + ? WHERE id = ?",
+        (match_usage["cost_usd"], batch_id),
+    )
+    db.commit()
 
     if not matches:
         return

@@ -3,6 +3,10 @@ import sqlite3
 
 import backend.routers.upload as upload
 
+# Stub usage dict returned by mocked match_ko_to_past_papers (signature now
+# returns (matches, usage)).
+_MATCH_USAGE = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "model": "claude-haiku-4-5"}
+
 
 def _set_past_paper(db_conn, batch_id):
     """Flip a batch's type to past_paper (make_batch defaults to knowledge_organiser)."""
@@ -45,7 +49,7 @@ def test_matcher_uses_full_corpus_not_just_100(
 
     def fake_match(ko_list, pp_list):
         captured["pp_count"] = len(pp_list)
-        return []
+        return [], _MATCH_USAGE
 
     monkeypatch.setattr(upload, "match_ko_to_past_papers", fake_match)
 
@@ -249,7 +253,7 @@ def test_blend_keeps_multiple_matches(
     db_conn.commit()
 
     def fake_match(ko_list, pp_list):
-        return [{"ko_question_id": ko_q, "past_paper_question_id": pid} for pid in pp_ids]
+        return [{"ko_question_id": ko_q, "past_paper_question_id": pid} for pid in pp_ids], _MATCH_USAGE
     monkeypatch.setattr(upload, "match_ko_to_past_papers", fake_match)
 
     upload._match_and_replace_with_past_papers(ko_batch, user_id, sid, db_conn)
@@ -281,7 +285,7 @@ def test_blend_caps_at_three(
         db_conn, user_id, sid, ["a", "b", "c", "d", "e"])
 
     monkeypatch.setattr(upload, "match_ko_to_past_papers",
-        lambda k, p: [{"ko_question_id": ko_q, "past_paper_question_id": pid} for pid in pp_ids])
+        lambda k, p: ([{"ko_question_id": ko_q, "past_paper_question_id": pid} for pid in pp_ids], _MATCH_USAGE))
 
     upload._match_and_replace_with_past_papers(ko_batch, user_id, sid, db_conn)
 
@@ -302,7 +306,7 @@ def test_blend_single_match_is_replace_only(
     pp_ids = _make_pp_batch_with_questions(db_conn, user_id, sid, ["only one"])
 
     monkeypatch.setattr(upload, "match_ko_to_past_papers",
-        lambda k, p: [{"ko_question_id": ko_q, "past_paper_question_id": pp_ids[0]}])
+        lambda k, p: ([{"ko_question_id": ko_q, "past_paper_question_id": pp_ids[0]}], _MATCH_USAGE))
 
     upload._match_and_replace_with_past_papers(ko_batch, user_id, sid, db_conn)
 
@@ -328,10 +332,10 @@ def test_blend_dedupes_pp_across_ko_questions(
     pp_ids = _make_pp_batch_with_questions(db_conn, user_id, sid, ["shared pp"])
 
     # Both KO questions claim the same single past-paper question.
-    monkeypatch.setattr(upload, "match_ko_to_past_papers", lambda k, p: [
+    monkeypatch.setattr(upload, "match_ko_to_past_papers", lambda k, p: ([
         {"ko_question_id": ko_a, "past_paper_question_id": pp_ids[0]},
         {"ko_question_id": ko_b, "past_paper_question_id": pp_ids[0]},
-    ])
+    ], _MATCH_USAGE))
 
     upload._match_and_replace_with_past_papers(ko_batch, user_id, sid, db_conn)
 
@@ -340,6 +344,34 @@ def test_blend_dedupes_pp_across_ko_questions(
         (ko_batch,)
     ).fetchone()["c"]
     assert pp_in_ko == 1   # used once; the second KO question keeps its AI question
+
+
+def test_blend_logs_matching_cost(
+    isolated_db, db_conn, regular_user, make_subject, make_batch, monkeypatch
+):
+    """The matcher's API call is recorded against the batch as a 'ko_matching'
+    api_usage row (with its model) and added to the batch cost."""
+    monkeypatch.setattr(upload, "DB_PATH", isolated_db)
+    user_id, _ = regular_user
+    sid = make_subject()
+    ko_batch = make_batch(user_id, sid)
+    ko_q = _make_ko_question(db_conn, ko_batch, user_id, sid)
+    pp_ids = _make_pp_batch_with_questions(db_conn, user_id, sid, ["only one"])
+
+    usage = {"input_tokens": 120, "output_tokens": 30, "cost_usd": 0.0042, "model": "claude-haiku-4-5"}
+    monkeypatch.setattr(upload, "match_ko_to_past_papers",
+        lambda k, p: ([{"ko_question_id": ko_q, "past_paper_question_id": pp_ids[0]}], usage))
+
+    upload._match_and_replace_with_past_papers(ko_batch, user_id, sid, db_conn)
+
+    row = db_conn.execute(
+        "SELECT model, input_tokens, output_tokens, cost_usd FROM api_usage "
+        "WHERE batch_id = ? AND call_type = 'ko_matching'", (ko_batch,)
+    ).fetchone()
+    assert row is not None
+    assert row["model"] == "claude-haiku-4-5"
+    assert row["input_tokens"] == 120
+    assert abs(row["cost_usd"] - 0.0042) < 1e-9
 
 
 def test_matching_prompt_supports_multiple_and_formats():

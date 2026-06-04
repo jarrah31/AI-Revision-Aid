@@ -394,10 +394,11 @@ def judge_typed_answer(
 
 def match_ko_to_past_papers(
     ko_questions: list[dict], past_paper_questions: list[dict]
-) -> list[dict]:
+) -> tuple[list[dict], dict]:
     """Match knowledge organiser questions to equivalent past paper questions.
     Model and prompt are read from DB settings (admin-configurable).
-    Returns list of {"ko_question_id": int, "past_paper_question_id": int}.
+    Returns (matches, usage) where matches is a list of
+    {"ko_question_id": int, "past_paper_question_id": int}.
     """
     client = get_client()
     model  = _get_ai_setting("ai_model_matching")
@@ -418,7 +419,7 @@ def match_ko_to_past_papers(
         messages=[{"role": "user", "content": prompt}],
     )
     result = json.loads(_strip_fences(message.content[0].text))
-    return result.get("matches", [])
+    return result.get("matches", []), _calc_usage(message, model)
 
 
 def extract_sections_from_handwritten(image_b64: str) -> tuple[list, dict]:
