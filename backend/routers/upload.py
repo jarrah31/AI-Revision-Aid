@@ -167,11 +167,12 @@ def _match_and_replace_with_past_papers(
     # No LIMIT: the matcher needs the full past-paper corpus. (Large corpora raise AI token cost — an accepted trade-off.)
     past_paper_qs = db.execute(
         """SELECT q.id, q.question_text, q.answer_text, q.options_json,
-                  q.question_type, q.difficulty,
+                  q.question_type, q.difficulty, q.batch_id AS source_batch_id,
                   b.exam_board, b.exam_year, b.paper_number
            FROM questions q
            JOIN upload_batches b ON b.id = q.batch_id
            WHERE q.subject_id = ? AND q.user_id = ? AND q.question_source = 'past_paper'
+             AND b.batch_type = 'past_paper'
            ORDER BY q.id DESC""",
         (subject_id, user_id),
     ).fetchall()
@@ -252,10 +253,11 @@ def _match_and_replace_with_past_papers(
                            question_source = 'past_paper',
                            question_source_detail = ?,
                            options_json = ?,
+                           source_batch_id = ?,
                            updated_at = datetime('now')
                        WHERE id = ?""",
                     (pp_q["question_text"], pp_q["answer_text"], source_detail,
-                     pp_q["options_json"], ko_q_id),
+                     pp_q["options_json"], pp_q["source_batch_id"], ko_q_id),
                 )
                 replaced += 1
             else:
@@ -268,13 +270,14 @@ def _match_and_replace_with_past_papers(
                        (batch_id, user_id, subject_id, category_id, subcategory_id,
                         page_number, question_text, answer_text, question_type, difficulty,
                         approved, question_source, question_source_detail, options_json,
-                        blend_inserted)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'past_paper', ?, ?, 1)""",
+                        blend_inserted, source_batch_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'past_paper', ?, ?, 1, ?)""",
                     (batch_id, user_id, subject_id,
                      ko_q["category_id"], ko_q["subcategory_id"],
                      ko_q["page_number"], pp_q["question_text"], pp_q["answer_text"],
                      pp_q["question_type"], pp_q["difficulty"],
-                     ko_q["approved"], source_detail, pp_q["options_json"]),
+                     ko_q["approved"], source_detail, pp_q["options_json"],
+                     pp_q["source_batch_id"]),
                 )
                 inserted += 1
             kept += 1
@@ -306,6 +309,7 @@ def _restore_blend(batch_id: int, db: sqlite3.Connection) -> dict:
                options_json = blend_origin_options,
                question_source = 'ai_generated',
                question_source_detail = NULL,
+               source_batch_id = NULL,
                blend_origin_text = NULL,
                blend_origin_answer = NULL,
                blend_origin_options = NULL,

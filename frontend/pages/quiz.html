@@ -121,6 +121,13 @@
         return `${s.question_count} question${s.question_count !== 1 ? 's' : ''}`;
     },
 
+    // Normalise a paper number (1, Paper 1, 1F) into a Paper-N pill label.
+    examPaperLabel(pn) {
+        if (!pn) return '';
+        const s = String(pn).trim();
+        return /^paper/i.test(s) ? s : 'Paper ' + s;
+    },
+
     loadSources() {
         clearTimeout(this._sourcesTimer);
         this._sourcesTimer = setTimeout(async () => {
@@ -746,6 +753,35 @@
         </div>
 
         <div x-show="currentQuestion" class="bg-white rounded-xl shadow-sm p-6">
+            <!-- Source provenance pills -->
+            <div class="flex flex-wrap items-center gap-1.5 mb-3" x-show="currentQuestion?.provenance">
+                <span x-show="currentQuestion?.provenance?.source === 'ai_generated'"
+                      class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 font-medium">
+                    🤖 AI generated
+                </span>
+                <span x-show="currentQuestion?.provenance?.source === 'past_paper'"
+                      class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 font-medium">
+                    📄 Exam question
+                </span>
+                <span x-show="currentQuestion?.provenance?.paper_number"
+                      class="inline-flex items-center text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600"
+                      x-text="examPaperLabel(currentQuestion?.provenance?.paper_number)"></span>
+                <span x-show="currentQuestion?.provenance?.tier"
+                      class="inline-flex items-center text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600"
+                      x-text="currentQuestion?.provenance?.tier"></span>
+                <span x-show="currentQuestion?.provenance?.exam_board || currentQuestion?.provenance?.exam_year"
+                      class="inline-flex items-center text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600"
+                      x-text="[currentQuestion?.provenance?.exam_board, currentQuestion?.provenance?.exam_year].filter(Boolean).join(' ')"></span>
+                <span x-show="currentQuestion?.provenance?.filename"
+                      class="inline-flex items-center text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 font-mono max-w-[16rem] truncate"
+                      :title="currentQuestion?.provenance?.filename"
+                      x-text="currentQuestion?.provenance?.filename"></span>
+                <!-- Legacy blended fallback: no structured exam metadata stored, show the detail string -->
+                <span x-show="currentQuestion?.provenance?.source === 'past_paper' && !currentQuestion?.provenance?.filename && currentQuestion?.provenance?.detail"
+                      class="inline-flex items-center text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500"
+                      x-text="currentQuestion?.provenance?.detail"></span>
+            </div>
+
             <!-- Question -->
             <p class="text-lg font-medium text-gray-800 mb-4" x-text="currentQuestion?.question_text"></p>
 

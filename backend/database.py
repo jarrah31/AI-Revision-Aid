@@ -350,6 +350,11 @@ def init_db():
         "ALTER TABLE questions ADD COLUMN blend_origin_answer TEXT DEFAULT NULL",
         "ALTER TABLE questions ADD COLUMN blend_origin_options TEXT DEFAULT NULL",
         "ALTER TABLE questions ADD COLUMN blend_inserted INTEGER NOT NULL DEFAULT 0",
+        # For blended questions, the original past-paper upload they were matched
+        # from (their own batch_id points at the KO booklet). Lets the quiz show
+        # paper/tier/filename provenance pills. NULL for AI and standalone rows
+        # (standalone past-paper questions already live in their exam batch).
+        "ALTER TABLE questions ADD COLUMN source_batch_id INTEGER DEFAULT NULL REFERENCES upload_batches(id) ON DELETE SET NULL",
     ]:
         try:
             db.execute(migration)

@@ -141,6 +141,42 @@ def _source_filter(sources: list[str] | None):
     return "(" + " OR ".join(clauses) + ")", []
 
 
+def _attach_source_meta(questions: list[dict], db: sqlite3.Connection) -> None:
+    """Attach a `provenance` dict to each question for the in-quiz pills.
+
+    {source: 'ai_generated'|'past_paper', detail, [paper_number, tier, filename,
+     exam_board, exam_year]}. Exam metadata is resolved from the question's source
+    upload — the original exam batch for blended rows (source_batch_id), otherwise
+    its own batch — and only populated when that upload is a real past-paper batch.
+    """
+    if not questions:
+        return
+    src_ids = {(q.get("source_batch_id") or q.get("batch_id")) for q in questions}
+    src_ids.discard(None)
+    meta: dict[int, dict] = {}
+    if src_ids:
+        rows = db.execute(
+            f"""SELECT id, batch_type, exam_board, exam_year, paper_number, tier, filename
+                FROM upload_batches WHERE id IN ({','.join('?' * len(src_ids))})""",
+            list(src_ids),
+        ).fetchall()
+        meta = {r["id"]: dict(r) for r in rows}
+    for q in questions:
+        prov = {
+            "source": q.get("question_source"),
+            "detail": q.get("question_source_detail"),
+        }
+        if q.get("question_source") == "past_paper":
+            m = meta.get(q.get("source_batch_id") or q.get("batch_id"))
+            if m and m["batch_type"] == "past_paper":
+                prov["paper_number"] = m["paper_number"]
+                prov["tier"] = m["tier"]
+                prov["filename"] = m["filename"]
+                prov["exam_board"] = m["exam_board"]
+                prov["exam_year"] = m["exam_year"]
+        q["provenance"] = prov
+
+
 @router.get("/count")
 def get_question_count(
     subject_id: int | None = Query(None),
@@ -345,6 +381,9 @@ def start_quiz(
     # first IDs for backward-compat category_id / subcategory_id columns
     first_cat_id = req.category_ids[0] if req.category_ids else None
     first_subcat_id = req.subcategory_ids[0] if req.subcategory_ids else None
+
+    # Attach source provenance (AI vs exam, and paper/tier/filename) for the pills.
+    _attach_source_meta(selected, db)
 
     # Strip is_correct flags before storing/returning to client
     selected = _prepare_questions_for_client(selected)

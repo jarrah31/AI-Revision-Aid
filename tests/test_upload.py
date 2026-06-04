@@ -578,6 +578,32 @@ def test_blend_stashes_origin_and_flags_inserted(
     assert extras == 1                               # the second match was inserted
 
 
+def test_blend_records_source_batch_id(
+    isolated_db, db_conn, regular_user, make_subject, make_batch, monkeypatch
+):
+    """Blended rows remember the exam batch they came from, so the quiz can show
+    paper/tier/filename pills (their own batch_id is the KO booklet)."""
+    monkeypatch.setattr(upload, "DB_PATH", isolated_db)
+    user_id, _ = regular_user
+    sid = make_subject()
+    ko_batch = make_batch(user_id, sid)
+    ko_q = _make_ko_question(db_conn, ko_batch, user_id, sid)
+    pp_ids = _make_pp_batch_with_questions(db_conn, user_id, sid, ["exam X", "exam Y"])
+    pp_batch = db_conn.execute(
+        "SELECT batch_id FROM questions WHERE id = ?", (pp_ids[0],)
+    ).fetchone()["batch_id"]
+
+    monkeypatch.setattr(upload, "match_ko_to_past_papers",
+        lambda k, p: ([{"ko_question_id": ko_q, "past_paper_question_id": pid} for pid in pp_ids], _MATCH_USAGE))
+    upload._match_and_replace_with_past_papers(ko_batch, user_id, sid, db_conn)
+
+    rows = db_conn.execute(
+        "SELECT source_batch_id FROM questions WHERE batch_id = ?", (ko_batch,)
+    ).fetchall()
+    assert len(rows) == 2
+    assert all(r["source_batch_id"] == pp_batch for r in rows)   # replaced + inserted
+
+
 def test_restore_blend_reverts_to_pre_blend_state(
     isolated_db, db_conn, regular_user, make_subject, make_batch, monkeypatch
 ):
@@ -597,7 +623,8 @@ def test_restore_blend_reverts_to_pre_blend_state(
     assert summary == {"deleted": 1, "restored": 1}
 
     rows = db_conn.execute(
-        "SELECT id, question_text, question_source, blend_origin_text, blend_inserted "
+        "SELECT id, question_text, question_source, blend_origin_text, blend_inserted, "
+        "       source_batch_id "
         "FROM questions WHERE batch_id = ? ORDER BY id", (ko_batch,)
     ).fetchall()
     assert len(rows) == 1                            # the inserted extra is gone
@@ -605,6 +632,7 @@ def test_restore_blend_reverts_to_pre_blend_state(
     assert rows[0]["question_text"] == "ORIGINAL KO"
     assert rows[0]["question_source"] == "ai_generated"
     assert rows[0]["blend_origin_text"] is None
+    assert rows[0]["source_batch_id"] is None        # exam link cleared on restore
 
 
 def test_restore_blend_ignores_legacy_rows(

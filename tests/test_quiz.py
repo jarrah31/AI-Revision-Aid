@@ -599,3 +599,74 @@ def test_sources_endpoint_excludes_unapproved(
     r = client.get(f"/api/quiz/sources?subject_id={sid}", headers=user_headers)
     assert r.status_code == 200
     assert r.json()[0]["question_count"] == 1
+
+
+# ── In-quiz source provenance pills ──────────────────────────────────────────
+
+def _make_exam_batch(db, uid, sid, make_batch, filename, board="AQA",
+                     year=2023, paper="Paper 2", tier="Higher"):
+    b = make_batch(uid, sid, filename=filename)
+    db.execute(
+        "UPDATE upload_batches SET batch_type='past_paper', exam_board=?, "
+        "exam_year=?, paper_number=?, tier=? WHERE id=?",
+        (board, year, paper, tier, b),
+    )
+    db.commit()
+    return b
+
+
+def test_start_quiz_attaches_provenance(
+    client, user_headers, regular_user, make_subject, make_batch, make_question, db_conn
+):
+    uid, _ = regular_user
+    sid = make_subject()
+    pp = _make_exam_batch(db_conn, uid, sid, make_batch, "AQA-Bio-P2H.pdf")
+    make_question(pp, uid, sid, question_source="past_paper", question_text="exam q")
+    ko = make_batch(uid, sid, filename="booklet.pdf")
+    make_question(ko, uid, sid, question_source="ai_generated", question_text="ai q")
+
+    r = client.post("/api/quiz/start", json={"subject_id": sid, "count": 20},
+                    headers=user_headers)
+    assert r.status_code == 200
+    by_text = {q["question_text"]: q["provenance"] for q in r.json()["questions"]}
+
+    assert by_text["ai q"]["source"] == "ai_generated"
+    assert "filename" not in by_text["ai q"]
+
+    ex = by_text["exam q"]
+    assert ex["source"] == "past_paper"
+    assert ex["paper_number"] == "Paper 2"
+    assert ex["tier"] == "Higher"
+    assert ex["filename"] == "AQA-Bio-P2H.pdf"
+    assert ex["exam_board"] == "AQA"
+    assert ex["exam_year"] == 2023
+
+
+def test_start_quiz_provenance_blended_uses_source_batch(
+    client, user_headers, regular_user, make_subject, make_batch, make_question, db_conn
+):
+    """A blended question's pills come from its source exam batch, not the KO
+    booklet it physically lives in."""
+    uid, _ = regular_user
+    sid = make_subject()
+    exam = _make_exam_batch(db_conn, uid, sid, make_batch, "exam-paper1F.pdf",
+                            paper="Paper 1", tier="Foundation")
+    ko = make_batch(uid, sid, filename="booklet.pdf")
+    db_conn.execute(
+        """INSERT INTO questions
+           (batch_id, user_id, subject_id, page_number, question_text, answer_text,
+            approved, question_source, source_batch_id)
+           VALUES (?, ?, ?, 1, 'blended exam q', 'a', 1, 'past_paper', ?)""",
+        (ko, uid, sid, exam),
+    )
+    db_conn.commit()
+
+    r = client.post("/api/quiz/start", json={"subject_id": sid, "count": 20},
+                    headers=user_headers)
+    assert r.status_code == 200
+    prov = next(q["provenance"] for q in r.json()["questions"]
+                if q["question_text"] == "blended exam q")
+    assert prov["source"] == "past_paper"
+    assert prov["filename"] == "exam-paper1F.pdf"     # the EXAM batch, not booklet.pdf
+    assert prov["paper_number"] == "Paper 1"
+    assert prov["tier"] == "Foundation"
