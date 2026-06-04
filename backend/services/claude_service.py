@@ -317,9 +317,13 @@ def detect_multiple_response_batch(questions: list[dict], subject: str) -> tuple
         questions_json=json.dumps(questions_for_prompt, indent=2),
     )
 
+    # A full paper can have many tick-box questions, each echoing its options
+    # verbatim. Give generous output headroom so the JSON is never truncated
+    # mid-array (a truncated response would fail to parse and yield zero
+    # detections, masking real results).
     message = client.messages.create(
         model=model,
-        max_tokens=4096,
+        max_tokens=8192,
         messages=[{"role": "user", "content": prompt}],
     )
     raw = json.loads(_strip_fences(message.content[0].text))
