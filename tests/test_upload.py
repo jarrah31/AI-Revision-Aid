@@ -193,7 +193,7 @@ def test_past_paper_question_without_figure_has_no_image(
     assert question["image_id"] is None
 
 
-def _make_pp_batch_with_questions(db_conn, upload, user_id, subject_id, texts,
+def _make_pp_batch_with_questions(db_conn, user_id, subject_id, texts,
                                   exam_board="AQA", exam_year=2023, paper_number="Paper 1"):
     """Insert a past_paper batch (with exam metadata) + its questions. Returns [pp_ids]."""
     cur = db_conn.execute(
@@ -239,7 +239,14 @@ def test_blend_keeps_multiple_matches(
     ko_batch = make_batch(user_id, sid)
     ko_q = _make_ko_question(db_conn, ko_batch, user_id, sid)
     pp_ids = _make_pp_batch_with_questions(
-        db_conn, upload, user_id, sid, ["pp A", "pp B", "pp C"])
+        db_conn, user_id, sid, ["pp A", "pp B", "pp C"])
+
+    # give the KO question a category so we can assert inheritance
+    cat_id = db_conn.execute(
+        "INSERT INTO categories (subject_id, name) VALUES (?, 'Cells')", (sid,)
+    ).lastrowid
+    db_conn.execute("UPDATE questions SET category_id = ? WHERE id = ?", (cat_id, ko_q))
+    db_conn.commit()
 
     def fake_match(ko_list, pp_list):
         return [{"ko_question_id": ko_q, "past_paper_question_id": pid} for pid in pp_ids]
@@ -256,6 +263,11 @@ def test_blend_keeps_multiple_matches(
     assert all(r["question_source_detail"] == "AQA 2023 Paper 1" for r in rows)
     assert {r["question_text"] for r in rows} == {"pp A", "pp B", "pp C"}
 
+    cats = db_conn.execute(
+        "SELECT DISTINCT category_id FROM questions WHERE batch_id = ?", (ko_batch,)
+    ).fetchall()
+    assert [c["category_id"] for c in cats] == [cat_id]
+
 
 def test_blend_caps_at_three(
     isolated_db, db_conn, regular_user, make_subject, make_batch, monkeypatch
@@ -266,7 +278,7 @@ def test_blend_caps_at_three(
     ko_batch = make_batch(user_id, sid)
     ko_q = _make_ko_question(db_conn, ko_batch, user_id, sid)
     pp_ids = _make_pp_batch_with_questions(
-        db_conn, upload, user_id, sid, ["a", "b", "c", "d", "e"])
+        db_conn, user_id, sid, ["a", "b", "c", "d", "e"])
 
     monkeypatch.setattr(upload, "match_ko_to_past_papers",
         lambda k, p: [{"ko_question_id": ko_q, "past_paper_question_id": pid} for pid in pp_ids])
@@ -287,7 +299,7 @@ def test_blend_single_match_is_replace_only(
     sid = make_subject()
     ko_batch = make_batch(user_id, sid)
     ko_q = _make_ko_question(db_conn, ko_batch, user_id, sid)
-    pp_ids = _make_pp_batch_with_questions(db_conn, upload, user_id, sid, ["only one"])
+    pp_ids = _make_pp_batch_with_questions(db_conn, user_id, sid, ["only one"])
 
     monkeypatch.setattr(upload, "match_ko_to_past_papers",
         lambda k, p: [{"ko_question_id": ko_q, "past_paper_question_id": pp_ids[0]}])
@@ -313,7 +325,7 @@ def test_blend_dedupes_pp_across_ko_questions(
     ko_batch = make_batch(user_id, sid)
     ko_a = _make_ko_question(db_conn, ko_batch, user_id, sid, "KO A")
     ko_b = _make_ko_question(db_conn, ko_batch, user_id, sid, "KO B")
-    pp_ids = _make_pp_batch_with_questions(db_conn, upload, user_id, sid, ["shared pp"])
+    pp_ids = _make_pp_batch_with_questions(db_conn, user_id, sid, ["shared pp"])
 
     # Both KO questions claim the same single past-paper question.
     monkeypatch.setattr(upload, "match_ko_to_past_papers", lambda k, p: [

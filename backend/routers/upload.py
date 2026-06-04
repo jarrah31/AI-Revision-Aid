@@ -150,6 +150,7 @@ def _match_and_replace_with_past_papers(
     # No LIMIT: the matcher needs the full past-paper corpus. (Large corpora raise AI token cost — an accepted trade-off.)
     past_paper_qs = db.execute(
         """SELECT q.id, q.question_text, q.answer_text, q.options_json,
+                  q.question_type, q.difficulty,
                   b.exam_board, b.exam_year, b.paper_number
            FROM questions q
            JOIN upload_batches b ON b.id = q.batch_id
@@ -224,12 +225,13 @@ def _match_and_replace_with_past_papers(
                 db.execute(
                     """INSERT INTO questions
                        (batch_id, user_id, subject_id, category_id, subcategory_id,
-                        page_number, question_text, answer_text, approved,
-                        question_source, question_source_detail, options_json)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'past_paper', ?, ?)""",
+                        page_number, question_text, answer_text, question_type, difficulty,
+                        approved, question_source, question_source_detail, options_json)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'past_paper', ?, ?)""",
                     (batch_id, user_id, subject_id,
                      ko_q["category_id"], ko_q["subcategory_id"],
                      ko_q["page_number"], pp_q["question_text"], pp_q["answer_text"],
+                     pp_q["question_type"], pp_q["difficulty"],
                      ko_q["approved"], source_detail, pp_q["options_json"]),
                 )
                 inserted += 1
