@@ -45,7 +45,8 @@ class QuizStartRequest(BaseModel):
     subcategory_ids: list[int] | None = None   # multi-select
     count: int = 20
     modes: list[str] | None = None  # e.g. ['flashcard','typed']; None/empty = all three
-    question_sources: list[str] | None = None  # e.g. ['ai_generated'], ['past_paper'], None = all
+    question_sources: list[str] | None = None  # subset of ['ai_generated','past_paper','blended']; None = all
+    blended_mode: str = "mixed"  # when 'blended' selected: 'mixed' (AI + exam) | 'exam_only'
 
 
 class AnswerRequest(BaseModel):
@@ -101,23 +102,31 @@ def _cat_subcat_filter(category_ids: list[int] | None, subcategory_ids: list[int
     return sql, subs + cats + subs
 
 
-def _source_filter(sources: list[str] | None):
+def _source_filter(sources: list[str] | None, blended_mode: str = "mixed"):
     """Return (sql_fragment, params) translating logical question sources into a
     WHERE clause. Three buckets:
 
       'ai_generated' — pure Knowledge Organiser questions (AI-generated).
       'past_paper'   — standalone past-paper questions (live in past_paper batches).
-      'blended'      — the FULL contents of a KO booklet that has been blended: the
+      'blended'      — questions from a KO booklet that has been blended. With
+                       blended_mode='mixed' (default) this is the FULL booklet: the
                        matched exam questions PLUS the AI questions covering knowledge
-                       that no exam question matched. (i.e. every question in a KO
-                       batch that has at least one matched exam question.)
+                       no exam matched. With blended_mode='exam_only' it is just the
+                       matched exam questions from those booklets.
 
-    'blended' deliberately overlaps 'ai_generated' — these are study modes, not a
-    strict partition. Empty/None selection means no filter (all sources). Returns
-    (None, []) when no filter applies.
+    'blended' (mixed) deliberately overlaps 'ai_generated' — these are study modes,
+    not a strict partition. Empty/None selection means no filter (all sources).
+    Returns (None, []) when no filter applies.
     """
     if not sources:
         return None, []
+    # Booklets that have been blended (contain at least one matched exam question).
+    blended_booklets = (
+        "q.batch_id IN (SELECT b.id FROM upload_batches b "
+        "WHERE b.batch_type = 'knowledge_organiser' AND EXISTS "
+        "(SELECT 1 FROM questions q2 WHERE q2.batch_id = b.id "
+        "AND q2.question_source = 'past_paper'))"
+    )
     clauses = []
     for s in sources:
         if s == "ai_generated":
@@ -128,14 +137,12 @@ def _source_filter(sources: list[str] | None):
                 "(SELECT id FROM upload_batches WHERE batch_type = 'past_paper'))"
             )
         elif s == "blended":
-            # The full contents of any KO booklet that has been blended: matched
-            # exam questions PLUS the AI questions covering knowledge no exam matched.
-            clauses.append(
-                "q.batch_id IN (SELECT b.id FROM upload_batches b "
-                "WHERE b.batch_type = 'knowledge_organiser' AND EXISTS "
-                "(SELECT 1 FROM questions q2 WHERE q2.batch_id = b.id "
-                "AND q2.question_source = 'past_paper'))"
-            )
+            if blended_mode == "exam_only":
+                # Only the matched exam questions from blended booklets.
+                clauses.append("(q.question_source = 'past_paper' AND " + blended_booklets + ")")
+            else:
+                # 'mixed': the whole booklet (AI for uncovered topics + exam matches).
+                clauses.append(blended_booklets)
     if not clauses:
         return None, []
     return "(" + " OR ".join(clauses) + ")", []
@@ -183,6 +190,7 @@ def get_question_count(
     category_ids: list[int] | None = Query(None),
     subcategory_ids: list[int] | None = Query(None),
     question_sources: list[str] | None = Query(None),
+    blended_mode: str = Query("mixed"),
     user: dict = Depends(get_current_user),
     db: sqlite3.Connection = Depends(get_db),
 ):
@@ -196,7 +204,7 @@ def get_question_count(
     if cat_filter:
         conditions.append(cat_filter)
         params.extend(cat_params)
-    src_filter, src_params = _source_filter(question_sources)
+    src_filter, src_params = _source_filter(question_sources, blended_mode)
     if src_filter:
         conditions.append(src_filter)
         params.extend(src_params)
@@ -279,7 +287,7 @@ def start_quiz(
     if cat_filter:
         conditions.append(cat_filter)
         params.extend(cat_params)
-    src_filter, src_params = _source_filter(req.question_sources)
+    src_filter, src_params = _source_filter(req.question_sources, req.blended_mode)
     if src_filter:
         conditions.append(src_filter)
         params.extend(src_params)

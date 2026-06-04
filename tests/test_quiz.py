@@ -535,6 +535,36 @@ def test_count_source_buckets(
     assert count("ai_generated", "blended") == 3         # AI is a subset of the booklet
 
 
+def test_blended_mode_exam_only(
+    client, user_headers, regular_user, make_subject, make_batch, make_question, db_conn
+):
+    """blended_mode='exam_only' returns just the matched exam questions from a
+    blended booklet, not its uncovered-knowledge AI questions."""
+    uid, _ = regular_user
+    sid = make_subject()
+    _blend_fixture(db_conn, uid, sid, make_batch, make_question)
+
+    def count(mode):
+        r = client.get(
+            f"/api/quiz/count?subject_id={sid}&question_sources=blended&blended_mode={mode}",
+            headers=user_headers,
+        )
+        assert r.status_code == 200
+        return r.json()["count"]
+
+    assert count("mixed") == 3          # 2 AI + 1 exam (whole booklet)
+    assert count("exam_only") == 1      # just the exam match
+
+    # start honours it too
+    r = client.post("/api/quiz/start",
+                    json={"subject_id": sid, "question_sources": ["blended"],
+                          "blended_mode": "exam_only", "count": 20},
+                    headers=user_headers)
+    assert r.status_code == 200
+    texts = {q["question_text"] for q in r.json()["questions"]}
+    assert texts == {"blended exam"}
+
+
 def test_blended_excludes_unblended_ko_batches(
     client, user_headers, regular_user, make_subject, make_batch, make_question, db_conn
 ):

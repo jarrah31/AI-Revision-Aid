@@ -8,6 +8,7 @@
     subjectCategories: {},        // subject_id → [categories]
     categorySubcategories: {},    // category_id → [subcategories]
     questionSources: [],          // [] = all; subset of ['ai_generated','past_paper','blended']
+    blendedMode: 'mixed',         // when 'blended' selected: 'mixed' (AI + exam) | 'exam_only'
     count: 20,
     selectedModes: [],       // [] = all modes (flashcard + mcq + typed)
     availableCount: null,
@@ -59,9 +60,15 @@
         this.$watch('selectedCategoryIds',  () => { this.loadAvailableCount(); this.loadSources(); });
         this.$watch('selectedSubcategoryIds', () => { this.loadAvailableCount(); this.loadSources(); });
         this.$watch('questionSources',      () => this.loadAvailableCount());
+        this.$watch('blendedMode',          () => this.loadAvailableCount());
         this.$watch('questionSources', () => {
             // MCQ distractors only exist for AI-generated KO questions; drop the
             // mode when the selection has no KO source (past-paper / blended only).
+            if (this.noAiSources()) {
+                this.selectedModes = this.selectedModes.filter(m => m !== 'mcq');
+            }
+        });
+        this.$watch('blendedMode', () => {
             if (this.noAiSources()) {
                 this.selectedModes = this.selectedModes.filter(m => m !== 'mcq');
             }
@@ -86,6 +93,19 @@
         }
     },
 
+    // Source selection. 'blended' is mutually exclusive with KO / Past Paper:
+    // choosing it clears the others, and choosing either of the others clears it.
+    toggleSource(id) {
+        const has = this.questionSources.includes(id);
+        if (id === 'blended') {
+            this.questionSources = has ? [] : ['blended'];
+        } else {
+            let next = this.questionSources.filter(s => s !== 'blended' && s !== id);
+            if (!has) next = [...next, id];
+            this.questionSources = next;
+        }
+    },
+
     availableModes() {
         const all = [
             {id: 'flashcard', label: 'Flashcard'},
@@ -97,9 +117,18 @@
         return this.noAiSources() ? all.filter(m => m.id !== 'mcq') : all;
     },
 
-    // True when the source selection is non-empty and excludes pure KO questions.
+    // True when the selection contains no AI-generated questions (so MCQ can't
+    // apply). Blended in 'mixed' mode DOES include KO/AI questions; 'exam_only'
+    // does not.
     noAiSources() {
-        return this.questionSources.length > 0 && !this.questionSources.includes('ai_generated');
+        if (this.questionSources.length === 0) return false;        // all sources
+        if (this.questionSources.includes('ai_generated')) return false;
+        if (this.questionSources.includes('blended') && this.blendedMode === 'mixed') return false;
+        return true;
+    },
+
+    blendedSelected() {
+        return this.questionSources.includes('blended');
     },
 
     sourceLabel(id) {
@@ -191,6 +220,7 @@
             this.selectedCategoryIds.forEach(id => params.append('category_ids', id));
             this.selectedSubcategoryIds.forEach(id => params.append('subcategory_ids', id));
             this.questionSources.forEach(s => params.append('question_sources', s));
+            if (this.blendedSelected()) params.set('blended_mode', this.blendedMode);
             try {
                 const res = await API.get('/quiz/count?' + params.toString());
                 this.availableCount = res.count;
@@ -314,6 +344,7 @@
                 category_ids: this.selectedCategoryIds.length > 0 ? this.selectedCategoryIds : null,
                 subcategory_ids: this.selectedSubcategoryIds.length > 0 ? this.selectedSubcategoryIds : null,
                 question_sources: this.questionSources.length > 0 ? this.questionSources : null,
+                blended_mode: this.blendedMode,
                 count: this.count,
                 modes: this.selectedModes.length > 0 ? this.selectedModes : null,
             });
@@ -573,9 +604,7 @@
                             {id: 'past_paper',   label: '📄 Past Paper'},
                             {id: 'blended',      label: '🔗 Blended'}
                         ]" :key="src.id">
-                            <button @click="questionSources.includes(src.id)
-                                        ? questionSources = questionSources.filter(s => s !== src.id)
-                                        : questionSources = [...questionSources, src.id]"
+                            <button @click="toggleSource(src.id)"
                                     :class="questionSources.includes(src.id)
                                         ? 'bg-indigo-600 text-white'
                                         : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
@@ -659,6 +688,29 @@
                             </button>
                         </template>
                     </div>
+                </div>
+
+                <!-- Blended sub-mode: only shown when the Blended source is selected -->
+                <div x-show="blendedSelected()">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Blended content</label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <template x-for="bm in [
+                            {id: 'mixed',     label: 'AI + Exam Mixed'},
+                            {id: 'exam_only', label: 'Exam Only'}
+                        ]" :key="bm.id">
+                            <button @click="blendedMode = bm.id"
+                                    :class="blendedMode === bm.id
+                                        ? 'bg-indigo-600 text-white ring-2 ring-indigo-300'
+                                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
+                                    class="px-3 py-2 rounded-lg text-sm font-medium transition"
+                                    x-text="bm.label">
+                            </button>
+                        </template>
+                    </div>
+                    <p class="text-xs text-gray-400 mt-1.5">
+                        <span x-show="blendedMode === 'mixed'">Exam questions where matched, plus KO questions for uncovered knowledge.</span>
+                        <span x-show="blendedMode === 'exam_only'">Only the real exam questions matched into the booklet.</span>
+                    </p>
                 </div>
 
                 <button @click="startQuiz()" :disabled="startingQuiz"
