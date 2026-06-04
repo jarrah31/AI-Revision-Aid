@@ -149,8 +149,11 @@ def _apply_ms_answers(batch_id: int, ms_answers: dict[str, str], db: sqlite3.Con
 
 def _match_and_replace_with_past_papers(
     batch_id: int, user_id: int, subject_id: int, db: sqlite3.Connection
-) -> None:
-    """After KO processing, replace AI questions with past paper equivalents where found."""
+) -> dict:
+    """After KO processing, replace AI questions with past paper equivalents where found.
+
+    Returns a summary dict: {"replaced", "inserted", "cost_usd"}.
+    """
     ko_questions = db.execute(
         "SELECT id, question_text, answer_text, category_id, subcategory_id, "
         "       approved, page_number "
@@ -159,7 +162,7 @@ def _match_and_replace_with_past_papers(
         (batch_id,),
     ).fetchall()
     if not ko_questions:
-        return
+        return {"replaced": 0, "inserted": 0, "cost_usd": 0.0}
 
     # No LIMIT: the matcher needs the full past-paper corpus. (Large corpora raise AI token cost — an accepted trade-off.)
     past_paper_qs = db.execute(
@@ -173,7 +176,7 @@ def _match_and_replace_with_past_papers(
         (subject_id, user_id),
     ).fetchall()
     if not past_paper_qs:
-        return  # No past papers uploaded yet — graceful no-op
+        return {"replaced": 0, "inserted": 0, "cost_usd": 0.0}  # No past papers uploaded yet — graceful no-op
 
     try:
         matches, match_usage = match_ko_to_past_papers(
@@ -182,7 +185,7 @@ def _match_and_replace_with_past_papers(
         )
     except Exception as e:
         print(f"[match_ko_to_past_papers] matching failed: {e}")
-        return
+        return {"replaced": 0, "inserted": 0, "cost_usd": 0.0}
 
     # Record the matching cost against the batch (the call happened regardless
     # of whether any matches were found).
@@ -200,7 +203,7 @@ def _match_and_replace_with_past_papers(
     db.commit()
 
     if not matches:
-        return
+        return {"replaced": 0, "inserted": 0, "cost_usd": match_usage["cost_usd"]}
 
     # Group matches by KO question, preserving the order the matcher returned them.
     grouped: dict[int, list[int]] = {}
@@ -234,10 +237,17 @@ def _match_and_replace_with_past_papers(
             source_detail = " ".join(p for p in parts if p).strip() or None
 
             if kept == 0:
-                # First match: replace the AI-generated question in place.
+                # First match: replace the AI-generated question in place, but
+                # stash the original AI question first (SQLite evaluates the SET
+                # right-hand sides against the pre-update row, so blend_origin_*
+                # captures the old values). This makes the replace reversible so
+                # the blend can be regenerated later — see _restore_blend.
                 db.execute(
                     """UPDATE questions
-                       SET question_text = ?,
+                       SET blend_origin_text = question_text,
+                           blend_origin_answer = answer_text,
+                           blend_origin_options = options_json,
+                           question_text = ?,
                            answer_text = ?,
                            question_source = 'past_paper',
                            question_source_detail = ?,
@@ -251,12 +261,15 @@ def _match_and_replace_with_past_papers(
             else:
                 # Extra matches: insert new past-paper rows into the same KO batch,
                 # inheriting the KO question's topic tags and approval state.
+                # blend_inserted=1 marks them as blend-generated so a regenerate
+                # can tear them down again (see _restore_blend).
                 db.execute(
                     """INSERT INTO questions
                        (batch_id, user_id, subject_id, category_id, subcategory_id,
                         page_number, question_text, answer_text, question_type, difficulty,
-                        approved, question_source, question_source_detail, options_json)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'past_paper', ?, ?)""",
+                        approved, question_source, question_source_detail, options_json,
+                        blend_inserted)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'past_paper', ?, ?, 1)""",
                     (batch_id, user_id, subject_id,
                      ko_q["category_id"], ko_q["subcategory_id"],
                      ko_q["page_number"], pp_q["question_text"], pp_q["answer_text"],
@@ -268,6 +281,51 @@ def _match_and_replace_with_past_papers(
 
     db.commit()
     print(f"[match_ko_to_past_papers] replaced {replaced}, inserted {inserted} extra past-paper questions")
+    return {"replaced": replaced, "inserted": inserted, "cost_usd": match_usage["cost_usd"]}
+
+
+def _restore_blend(batch_id: int, db: sqlite3.Connection) -> dict:
+    """Tear down a KO batch's blend, returning it to its pre-blend state.
+
+    - Deletes rows inserted as extra exam matches (blend_inserted=1). The FK
+      ON DELETE CASCADE cleans up their srs_cards / quiz_answers automatically.
+    - Reverts in-place replacements back to the original AI question stashed in
+      blend_origin_*, keeping the same question_id so SRS history survives.
+
+    Rows blended under the pre-reversible scheme (blend_origin_text IS NULL and
+    blend_inserted=0) cannot be restored — they are left untouched. Returns a
+    summary dict: {"deleted", "restored"}.
+    """
+    deleted = db.execute(
+        "DELETE FROM questions WHERE batch_id = ? AND blend_inserted = 1", (batch_id,)
+    ).rowcount
+    restored = db.execute(
+        """UPDATE questions
+           SET question_text = blend_origin_text,
+               answer_text = blend_origin_answer,
+               options_json = blend_origin_options,
+               question_source = 'ai_generated',
+               question_source_detail = NULL,
+               blend_origin_text = NULL,
+               blend_origin_answer = NULL,
+               blend_origin_options = NULL,
+               updated_at = datetime('now')
+           WHERE batch_id = ? AND blend_origin_text IS NOT NULL""",
+        (batch_id,),
+    ).rowcount
+    db.commit()
+    return {"deleted": deleted, "restored": restored}
+
+
+def regenerate_blend(
+    batch_id: int, user_id: int, subject_id: int, db: sqlite3.Connection
+) -> dict:
+    """Re-run a KO batch's blend from scratch against the *current* past-paper
+    corpus: restore the batch to its pre-blend state, then re-match. Returns the
+    matcher summary plus the restore counts."""
+    restore = _restore_blend(batch_id, db)
+    summary = _match_and_replace_with_past_papers(batch_id, user_id, subject_id, db)
+    return {**summary, "restored": restore["restored"], "deleted": restore["deleted"]}
 
 
 def process_batch(
@@ -1489,7 +1547,9 @@ def get_upload_history(
     batches = db.execute(
         """SELECT b.*, s.name as subject_name,
                   (SELECT COUNT(*) FROM questions q WHERE q.batch_id = b.id) as question_count,
-                  (SELECT COUNT(*) FROM questions q WHERE q.batch_id = b.id AND q.approved = 1) as approved_count
+                  (SELECT COUNT(*) FROM questions q WHERE q.batch_id = b.id AND q.approved = 1) as approved_count,
+                  (SELECT COUNT(*) FROM questions q WHERE q.batch_id = b.id
+                     AND q.question_source = 'past_paper') as blended_count
            FROM upload_batches b
            JOIN subjects s ON s.id = b.subject_id
            WHERE b.user_id = ?
@@ -1497,3 +1557,34 @@ def get_upload_history(
         (user["id"],),
     ).fetchall()
     return [dict(b) for b in batches]
+
+
+@router.post("/{batch_id}/reblend")
+def reblend_batch(
+    batch_id: int,
+    user: dict = Depends(get_current_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Regenerate a Knowledge Organiser batch's past-paper blend from scratch.
+
+    Tears down the existing blend and re-matches every KO point against the
+    current (possibly grown) past-paper corpus. Runs synchronously: it's a
+    single matching call. Returns a summary of what changed plus the cost.
+    """
+    batch = db.execute(
+        "SELECT id, user_id, batch_type, subject_id FROM upload_batches WHERE id = ?",
+        (batch_id,),
+    ).fetchone()
+    if not batch or batch["user_id"] != user["id"]:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    if batch["batch_type"] != "knowledge_organiser":
+        raise HTTPException(
+            status_code=400, detail="Only Knowledge Organiser uploads can be blended"
+        )
+
+    try:
+        summary = regenerate_blend(batch_id, user["id"], batch["subject_id"], db)
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Regenerate failed: {e}")
+    return summary

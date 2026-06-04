@@ -539,3 +539,191 @@ def test_compute_matches_keeps_foundation_and_higher_separate():
     by_qp = {m["qp_id"]: m["ms_id"] for m in paired}
     assert by_qp[1] == 2   # Foundation QP -> Foundation MS
     assert by_qp[3] == 4   # Higher QP -> Higher MS
+
+
+# ── Reversible blend + regenerate ──────────────────────────────────────────
+
+def test_blend_stashes_origin_and_flags_inserted(
+    isolated_db, db_conn, regular_user, make_subject, make_batch, monkeypatch
+):
+    """A blend must be reversible: the in-place replaced row keeps its original
+    AI question in blend_origin_*, and extra rows are flagged blend_inserted=1."""
+    monkeypatch.setattr(upload, "DB_PATH", isolated_db)
+    user_id, _ = regular_user
+    sid = make_subject()
+    ko_batch = make_batch(user_id, sid)
+    ko_q = _make_ko_question(db_conn, ko_batch, user_id, sid, text="ORIGINAL KO")
+    pp_ids = _make_pp_batch_with_questions(db_conn, user_id, sid, ["exam X", "exam Y"])
+
+    monkeypatch.setattr(upload, "match_ko_to_past_papers",
+        lambda k, p: ([{"ko_question_id": ko_q, "past_paper_question_id": pid} for pid in pp_ids], _MATCH_USAGE))
+
+    upload._match_and_replace_with_past_papers(ko_batch, user_id, sid, db_conn)
+
+    replaced = db_conn.execute(
+        "SELECT question_text, answer_text, question_source, blend_origin_text, "
+        "       blend_origin_answer, blend_inserted "
+        "FROM questions WHERE id = ?", (ko_q,)
+    ).fetchone()
+    assert replaced["question_source"] == "past_paper"
+    assert replaced["question_text"] == "exam X"
+    assert replaced["blend_origin_text"] == "ORIGINAL KO"
+    assert replaced["blend_origin_answer"] == "ko ans"
+    assert replaced["blend_inserted"] == 0          # the replaced row is not an "insert"
+
+    extras = db_conn.execute(
+        "SELECT COUNT(*) c FROM questions WHERE batch_id = ? AND blend_inserted = 1",
+        (ko_batch,)
+    ).fetchone()["c"]
+    assert extras == 1                               # the second match was inserted
+
+
+def test_restore_blend_reverts_to_pre_blend_state(
+    isolated_db, db_conn, regular_user, make_subject, make_batch, monkeypatch
+):
+    """_restore_blend deletes inserted extras and reverts replaced rows back to
+    their original ai_generated question (same row id, SRS-preserving)."""
+    monkeypatch.setattr(upload, "DB_PATH", isolated_db)
+    user_id, _ = regular_user
+    sid = make_subject()
+    ko_batch = make_batch(user_id, sid)
+    ko_q = _make_ko_question(db_conn, ko_batch, user_id, sid, text="ORIGINAL KO")
+    pp_ids = _make_pp_batch_with_questions(db_conn, user_id, sid, ["exam X", "exam Y"])
+    monkeypatch.setattr(upload, "match_ko_to_past_papers",
+        lambda k, p: ([{"ko_question_id": ko_q, "past_paper_question_id": pid} for pid in pp_ids], _MATCH_USAGE))
+    upload._match_and_replace_with_past_papers(ko_batch, user_id, sid, db_conn)
+
+    summary = upload._restore_blend(ko_batch, db_conn)
+    assert summary == {"deleted": 1, "restored": 1}
+
+    rows = db_conn.execute(
+        "SELECT id, question_text, question_source, blend_origin_text, blend_inserted "
+        "FROM questions WHERE batch_id = ? ORDER BY id", (ko_batch,)
+    ).fetchall()
+    assert len(rows) == 1                            # the inserted extra is gone
+    assert rows[0]["id"] == ko_q                     # same row -> SRS history intact
+    assert rows[0]["question_text"] == "ORIGINAL KO"
+    assert rows[0]["question_source"] == "ai_generated"
+    assert rows[0]["blend_origin_text"] is None
+
+
+def test_restore_blend_ignores_legacy_rows(
+    isolated_db, db_conn, regular_user, make_subject, make_batch, monkeypatch
+):
+    """Rows blended under the old destructive scheme (no blend_origin_text, not
+    flagged inserted) cannot be restored and must be left untouched."""
+    monkeypatch.setattr(upload, "DB_PATH", isolated_db)
+    user_id, _ = regular_user
+    sid = make_subject()
+    ko_batch = make_batch(user_id, sid)
+    # Simulate a legacy in-place replacement: past_paper, no origin, not inserted.
+    legacy = db_conn.execute(
+        """INSERT INTO questions (batch_id, user_id, subject_id, page_number,
+           question_text, answer_text, question_source)
+           VALUES (?, ?, ?, 1, 'legacy exam q', 'a', 'past_paper')""",
+        (ko_batch, user_id, sid),
+    ).lastrowid
+    db_conn.commit()
+
+    summary = upload._restore_blend(ko_batch, db_conn)
+    assert summary == {"deleted": 0, "restored": 0}
+    row = db_conn.execute(
+        "SELECT question_text, question_source FROM questions WHERE id = ?", (legacy,)
+    ).fetchone()
+    assert row["question_source"] == "past_paper"    # untouched
+    assert row["question_text"] == "legacy exam q"
+
+
+def test_regenerate_blend_rematches_against_grown_corpus(
+    isolated_db, db_conn, regular_user, make_subject, make_batch, monkeypatch
+):
+    """The whole point: after more past papers are added, regenerating re-matches
+    the KO point fresh and picks up the new exam questions."""
+    monkeypatch.setattr(upload, "DB_PATH", isolated_db)
+    user_id, _ = regular_user
+    sid = make_subject()
+    ko_batch = make_batch(user_id, sid)
+    ko_q = _make_ko_question(db_conn, ko_batch, user_id, sid, text="KO POINT")
+
+    # The matcher links the KO point to every past paper in the corpus it's given.
+    def fake_match(ko_list, pp_list):
+        kid = ko_list[0]["id"]
+        return ([{"ko_question_id": kid, "past_paper_question_id": p["id"]} for p in pp_list], _MATCH_USAGE)
+    monkeypatch.setattr(upload, "match_ko_to_past_papers", fake_match)
+
+    # First blend: only one past paper exists -> single in-place replacement.
+    _make_pp_batch_with_questions(db_conn, user_id, sid, ["exam 1"])
+    upload._match_and_replace_with_past_papers(ko_batch, user_id, sid, db_conn)
+    n = db_conn.execute(
+        "SELECT COUNT(*) c FROM questions WHERE batch_id = ?", (ko_batch,)
+    ).fetchone()["c"]
+    assert n == 1
+
+    # More past papers arrive, then regenerate.
+    _make_pp_batch_with_questions(db_conn, user_id, sid, ["exam 2", "exam 3"])
+    result = upload.regenerate_blend(ko_batch, user_id, sid, db_conn)
+
+    rows = db_conn.execute(
+        "SELECT question_text, question_source, blend_origin_text "
+        "FROM questions WHERE batch_id = ? ORDER BY id", (ko_batch,)
+    ).fetchall()
+    assert len(rows) == 3                            # capped at 3, re-matched fresh
+    assert all(r["question_source"] == "past_paper" for r in rows)
+    # The KO origin was restored before re-matching, then re-stashed on replace.
+    origin = db_conn.execute(
+        "SELECT blend_origin_text FROM questions WHERE id = ?", (ko_q,)
+    ).fetchone()["blend_origin_text"]
+    assert origin == "KO POINT"
+    assert result["restored"] == 1                   # the prior replacement was undone
+
+
+def test_reblend_endpoint_regenerates(
+    client, db_conn, regular_user, make_subject, make_batch, monkeypatch
+):
+    user_id, token = regular_user
+    sid = make_subject()
+    ko_batch = make_batch(user_id, sid)
+    ko_q = _make_ko_question(db_conn, ko_batch, user_id, sid)
+    pp_ids = _make_pp_batch_with_questions(db_conn, user_id, sid, ["exam A", "exam B"])
+    monkeypatch.setattr(upload, "match_ko_to_past_papers",
+        lambda k, p: ([{"ko_question_id": ko_q, "past_paper_question_id": pid} for pid in pp_ids], _MATCH_USAGE))
+
+    resp = client.post(f"/api/upload/{ko_batch}/reblend",
+                       headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["replaced"] == 1
+    assert data["inserted"] == 1
+
+    rows = db_conn.execute(
+        "SELECT question_source FROM questions WHERE batch_id = ?", (ko_batch,)
+    ).fetchall()
+    assert len(rows) == 2
+    assert all(r["question_source"] == "past_paper" for r in rows)
+
+
+def test_reblend_endpoint_404_for_other_users_batch(
+    client, db_conn, regular_user, second_user, make_subject, make_batch
+):
+    owner_id, _ = regular_user
+    _, other_token = second_user
+    sid = make_subject()
+    ko_batch = make_batch(owner_id, sid)
+
+    resp = client.post(f"/api/upload/{ko_batch}/reblend",
+                       headers={"Authorization": f"Bearer {other_token}"})
+    assert resp.status_code == 404
+
+
+def test_reblend_endpoint_rejects_non_ko_batch(
+    client, db_conn, regular_user, make_subject, make_batch
+):
+    user_id, token = regular_user
+    sid = make_subject()
+    b = make_batch(user_id, sid)
+    db_conn.execute("UPDATE upload_batches SET batch_type = 'past_paper' WHERE id = ?", (b,))
+    db_conn.commit()
+
+    resp = client.post(f"/api/upload/{b}/reblend",
+                       headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 400

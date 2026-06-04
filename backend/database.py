@@ -340,6 +340,16 @@ def init_db():
         # Record which model processed each API call (admin-configurable at
         # runtime, so cost rows are otherwise ambiguous about which model ran).
         "ALTER TABLE api_usage ADD COLUMN model TEXT DEFAULT NULL",
+        # Reversible past-paper blend. When an exam match overwrites a KO
+        # question in place, its original AI question is stashed in these
+        # columns; rows inserted purely as extra exam matches are flagged with
+        # blend_inserted=1. Together these let a KO's blend be torn down and
+        # regenerated from scratch against an updated past-paper corpus, while
+        # preserving the SRS history of the in-place rows (same question_id).
+        "ALTER TABLE questions ADD COLUMN blend_origin_text TEXT DEFAULT NULL",
+        "ALTER TABLE questions ADD COLUMN blend_origin_answer TEXT DEFAULT NULL",
+        "ALTER TABLE questions ADD COLUMN blend_origin_options TEXT DEFAULT NULL",
+        "ALTER TABLE questions ADD COLUMN blend_inserted INTEGER NOT NULL DEFAULT 0",
     ]:
         try:
             db.execute(migration)

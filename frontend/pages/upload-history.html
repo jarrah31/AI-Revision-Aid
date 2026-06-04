@@ -6,6 +6,7 @@ Alpine.data('uploadHistoryPage', () => ({
     expanded: {},      // batch_id -> bool
     breakdowns: {},    // batch_id -> {breakdown:[...], total_cost_usd, ...}
     bdLoading: {},     // batch_id -> bool
+    reblending: {},    // batch_id -> bool
 
     async init() {
         try {
@@ -15,6 +16,51 @@ Alpine.data('uploadHistoryPage', () => ({
             $store.app.showToast('Failed to load upload history', 'error');
         } finally {
             this.loading = false;
+        }
+    },
+
+    canReblend(b) {
+        return b.batch_type === 'knowledge_organiser' && b.status === 'completed';
+    },
+
+    // Wrapped in a method with a strict === true check: reading a missing key on
+    // the Alpine reactive `reblending` proxy inside x-for returns a truthy proxy,
+    // not undefined (see CLAUDE.md), which would wrongly disable every button.
+    isReblending(b) {
+        return this.reblending[b.id] === true;
+    },
+
+    async reblend(b) {
+        if (this.reblending[b.id]) return;
+        const hadBlend = (b.past_paper_count || 0) > 0;
+        const msg = 'Regenerate the past-paper blend for "' + b.filename + '"?\n\n'
+            + 'This re-matches every Knowledge Organiser point against ALL past papers '
+            + 'currently in this subject, so it makes one paid AI matching call.'
+            + (hadBlend
+                ? '\n\nNote: questions blended before this feature existed can’t be '
+                  + 're-matched (their original wording wasn’t saved) — they’ll be '
+                  + 'kept as-is while the rest are re-matched. Re-upload the booklet for a '
+                  + '100% clean slate.'
+                : '');
+        if (!confirm(msg)) return;
+
+        this.reblending[b.id] = true;
+        try {
+            const r = await API.post('/upload/' + b.id + '/reblend', {});
+            const matched = (r.replaced || 0) + (r.inserted || 0);
+            $store.app.showToast(
+                matched > 0
+                    ? `Blend regenerated: ${matched} exam question${matched !== 1 ? 's' : ''} matched (${this.fmt(r.cost_usd || 0)})`
+                    : `No new matches found (${this.fmt(r.cost_usd || 0)})`,
+                'success');
+            // Refresh so question/blend counts and cost reflect the new state.
+            this.batches = await API.get('/costs/history');
+            this.totalCost = this.batches.reduce((s, x) => s + (x.cost_usd || 0), 0);
+            delete this.breakdowns[b.id];   // stale; will re-fetch on expand
+        } catch (e) {
+            $store.app.showToast('Regenerate failed: ' + (e.message || 'unknown error'), 'error');
+        } finally {
+            this.reblending[b.id] = false;
         }
     },
 
@@ -221,6 +267,12 @@ Alpine.data('uploadHistoryPage', () => ({
                                class="text-xs text-gray-500 hover:underline whitespace-nowrap">
                                 Source PDF
                             </a>
+                            <button x-show="canReblend(b)"
+                                    @click="reblend(b)"
+                                    :disabled="isReblending(b)"
+                                    class="text-xs text-emerald-700 hover:underline whitespace-nowrap disabled:text-gray-400 disabled:no-underline disabled:cursor-wait text-left sm:text-right">
+                                <span x-text="isReblending(b) ? 'Regenerating…' : '🔄 Regenerate blend'"></span>
+                            </button>
                         </div>
                     </div>
                 </div>
