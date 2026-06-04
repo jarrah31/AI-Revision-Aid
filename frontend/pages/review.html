@@ -1,6 +1,7 @@
 <script>
 Alpine.data('reviewPage', () => ({
     batchId: null,
+    coverage: null,
     questions: [],
     loading: true,
     currentPage: null,
@@ -43,6 +44,11 @@ Alpine.data('reviewPage', () => ({
         try {
             const res = await API.get('/questions?batch_id=' + this.batchId + '&limit=200');
             this.questions = res.questions;
+            try {
+                this.coverage = await API.get('/questions/coverage?batch_id=' + this.batchId);
+            } catch (e) {
+                this.coverage = null;
+            }
             const pageSet = new Set(this.questions.map(q => q.page_number));
             this.pages = [...pageSet].sort((a, b) => a - b);
             if (this.pages.length > 0 && !this.currentPage) {
@@ -392,6 +398,22 @@ Alpine.data('reviewPage', () => ({
                             </div>
                         </div>
                     </div>
+                </div>
+            </div>
+
+            <div x-show="coverage && coverage.batch_type === 'knowledge_organiser' && coverage.total > 0"
+                 class="mb-4 p-3 rounded-lg bg-indigo-50 border border-indigo-100">
+                <div class="text-sm text-indigo-900">
+                    <span class="font-semibold"
+                          x-text="coverage.past_paper + ' of ' + coverage.total + ' questions (' + Math.round((coverage.past_paper / coverage.total) * 100) + '%) matched to real past papers'"></span>
+                    <span class="text-indigo-700"
+                          x-text="' · ' + coverage.ai_generated + ' AI-generated'"></span>
+                </div>
+                <div x-show="coverage.by_paper && coverage.by_paper.length > 0"
+                     class="mt-1 text-xs text-indigo-700 flex flex-wrap gap-x-3 gap-y-0.5">
+                    <template x-for="bp in coverage.by_paper" :key="bp.source">
+                        <span x-text="bp.source + ': ' + bp.count"></span>
+                    </template>
                 </div>
             </div>
 
