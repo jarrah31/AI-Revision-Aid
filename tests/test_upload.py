@@ -191,3 +191,14 @@ def test_past_paper_question_without_figure_has_no_image(
 
     assert len(images) == 0
     assert question["image_id"] is None
+
+
+def test_matching_prompt_supports_multiple_and_formats():
+    from backend.prompts.matching import MATCHING_PROMPT
+    # Format-string integrity: both placeholders must survive and no stray braces.
+    rendered = MATCHING_PROMPT.format(ko_list="[]", pp_list="[]")
+    assert "[]" in rendered
+    # Must instruct multiple matches per KO point, capped at 3.
+    assert "up to 3" in MATCHING_PROMPT
+    lowered = MATCHING_PROMPT.lower()
+    assert "different way" in lowered
