@@ -351,3 +351,42 @@ def test_matching_prompt_supports_multiple_and_formats():
     assert "up to 3" in MATCHING_PROMPT
     lowered = MATCHING_PROMPT.lower()
     assert "different way" in lowered
+
+
+def _df(fid, paper_type, paper_number, tier, board="AQA", year=2024):
+    """Build a detected-file dict shaped like paper_detection_files rows."""
+    return {
+        "id": fid, "status": "detected", "paper_type": paper_type,
+        "exam_board": board, "exam_year": year,
+        "paper_number": paper_number, "tier": tier,
+    }
+
+
+def test_compute_matches_pairs_qp_1F_with_ms_paper_1():
+    """Regression: QP cover yields paper_number 'Paper 1F' (tier folded in) while
+    the MS cover yields 'Paper 1'. They are the same paper and must pair."""
+    files = [
+        _df(1, "question_paper", "Paper 1F", "Foundation"),
+        _df(2, "mark_scheme", "Paper 1", "Foundation"),
+    ]
+    matches = upload._compute_matches(files)
+    paired = [m for m in matches if m["match_group"] is not None]
+    assert len(paired) == 1
+    assert paired[0]["qp_id"] == 1
+    assert paired[0]["ms_id"] == 2          # MS must be matched, not skipped
+
+
+def test_compute_matches_keeps_foundation_and_higher_separate():
+    """Tier-letter normalisation must NOT collapse Foundation and Higher papers."""
+    files = [
+        _df(1, "question_paper", "Paper 1F", "Foundation"),
+        _df(2, "mark_scheme", "Paper 1", "Foundation"),
+        _df(3, "question_paper", "Paper 1H", "Higher"),
+        _df(4, "mark_scheme", "Paper 1", "Higher"),
+    ]
+    matches = upload._compute_matches(files)
+    paired = [m for m in matches if m["match_group"] is not None]
+    assert len(paired) == 2
+    by_qp = {m["qp_id"]: m["ms_id"] for m in paired}
+    assert by_qp[1] == 2   # Foundation QP -> Foundation MS
+    assert by_qp[3] == 4   # Higher QP -> Higher MS

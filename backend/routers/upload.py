@@ -1085,6 +1085,25 @@ class ConfirmDetectionRequest(BaseModel):
     pairs: list[ConfirmPair]
 
 
+def _normalize_paper_number(pn: str | None) -> str:
+    """Normalise a detected paper number for QP<->MS matching.
+
+    Cover pages encode the paper inconsistently. A question paper whose front
+    sheet only shows the code (e.g. '8461/1F') is read as 'Paper 1F' — the
+    tier letter folded into the number — while the matching mark scheme, which
+    prints 'Paper 1' and 'Foundation Tier' separately, is read as 'Paper 1'.
+    The tier is already a separate match-key field, so strip a trailing F/H
+    tier letter here so the two forms compare equal. Foundation vs Higher
+    stays distinguished by the tier field.
+    """
+    if not pn:
+        return ""
+    s = pn.lower().strip()
+    s = re.sub(r"(\d)\s*[fh]\b", r"\1", s)   # 'paper 1f' -> 'paper 1'
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
 def _compute_matches(files: list[dict]) -> list[dict]:
     """Group detected files into QP+MS pairs by shared metadata."""
     from collections import defaultdict
@@ -1096,7 +1115,7 @@ def _compute_matches(files: list[dict]) -> list[dict]:
         key = (
             (f["exam_board"] or "").lower(),
             f["exam_year"],
-            (f["paper_number"] or "").lower(),
+            _normalize_paper_number(f["paper_number"]),
             (f["tier"] or "").lower(),
         )
         # Only group when at least board+year are known
