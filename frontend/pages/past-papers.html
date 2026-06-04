@@ -207,11 +207,15 @@ Alpine.data('pastPapersPage', () => ({
     <template x-for="p in papers" :key="p.id">
         <div class="border rounded-lg mb-3 bg-white shadow-sm">
             <div class="flex items-center justify-between p-3">
-                <button @click="toggle(p.id)" class="flex items-center gap-2 text-left">
-                    <span x-text="expanded[p.id] ? '▼' : '▶'"></span>
-                    <span class="font-semibold" x-text="paperLabel(p)"></span>
-                    <span class="text-sm text-gray-500"
-                          x-text="`${p.question_count} questions · ${p.figure_count} figures`"></span>
+                <button @click="toggle(p.id)" class="flex items-start gap-2 text-left min-w-0">
+                    <span class="mt-0.5" x-text="expanded[p.id] ? '▼' : '▶'"></span>
+                    <span class="min-w-0">
+                        <span class="font-semibold" x-text="paperLabel(p)"></span>
+                        <span class="text-sm text-gray-500 ml-2"
+                              x-text="`${p.question_count} questions · ${p.figure_count} figures`"></span>
+                        <span x-show="p.filename" class="block text-xs text-gray-400 font-mono truncate"
+                              :title="p.filename" x-text="p.filename"></span>
+                    </span>
                 </button>
                 <div class="flex items-center gap-2">
                     <button @click="redetectMultiResponse(p)" :disabled="_redetectingId !== null"
