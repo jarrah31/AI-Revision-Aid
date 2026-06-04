@@ -138,7 +138,9 @@ def _match_and_replace_with_past_papers(
 ) -> None:
     """After KO processing, replace AI questions with past paper equivalents where found."""
     ko_questions = db.execute(
-        "SELECT id, question_text, answer_text FROM questions "
+        "SELECT id, question_text, answer_text, category_id, subcategory_id, "
+        "       approved, page_number "
+        "FROM questions "
         "WHERE batch_id = ? AND question_source = 'ai_generated'",
         (batch_id,),
     ).fetchall()
@@ -147,7 +149,7 @@ def _match_and_replace_with_past_papers(
 
     # No LIMIT: the matcher needs the full past-paper corpus. (Large corpora raise AI token cost — an accepted trade-off.)
     past_paper_qs = db.execute(
-        """SELECT q.id, q.question_text, q.answer_text,
+        """SELECT q.id, q.question_text, q.answer_text, q.options_json,
                   b.exam_board, b.exam_year, b.paper_number
            FROM questions q
            JOIN upload_batches b ON b.id = q.batch_id
@@ -170,37 +172,71 @@ def _match_and_replace_with_past_papers(
     if not matches:
         return
 
-    used_pp_ids: set[int] = set()
+    # Group matches by KO question, preserving the order the matcher returned them.
+    grouped: dict[int, list[int]] = {}
     for m in matches:
         ko_q_id = m.get("ko_question_id")
         pp_q_id = m.get("past_paper_question_id")
         if not ko_q_id or not pp_q_id:
             continue
-        if pp_q_id in used_pp_ids:
-            continue  # Each past paper question only used once
-        used_pp_ids.add(pp_q_id)
+        grouped.setdefault(ko_q_id, []).append(pp_q_id)
 
-        pp_q = next((q for q in past_paper_qs if q["id"] == pp_q_id), None)
-        if not pp_q:
+    used_pp_ids: set[int] = set()
+    replaced = 0
+    inserted = 0
+    for ko_q_id, pp_ids in grouped.items():
+        ko_q = next((q for q in ko_questions if q["id"] == ko_q_id), None)
+        if not ko_q:
             continue
 
-        # Build human-readable source label e.g. "AQA 2023 Paper 1"
-        parts = [pp_q["exam_board"] or "", str(pp_q["exam_year"] or ""), pp_q["paper_number"] or ""]
-        source_detail = " ".join(p for p in parts if p).strip()
+        kept = 0
+        for pp_q_id in pp_ids:
+            if kept >= 3:
+                break  # cap: at most 3 exam questions per KO point
+            if pp_q_id in used_pp_ids:
+                continue  # each past-paper question is used once overall
+            pp_q = next((q for q in past_paper_qs if q["id"] == pp_q_id), None)
+            if not pp_q:
+                continue
+            used_pp_ids.add(pp_q_id)
 
-        db.execute(
-            """UPDATE questions
-               SET question_text = ?,
-                   answer_text = ?,
-                   question_source = 'past_paper',
-                   question_source_detail = ?,
-                   updated_at = datetime('now')
-               WHERE id = ?""",
-            (pp_q["question_text"], pp_q["answer_text"], source_detail or None, ko_q_id),
-        )
+            parts = [pp_q["exam_board"] or "", str(pp_q["exam_year"] or ""), pp_q["paper_number"] or ""]
+            source_detail = " ".join(p for p in parts if p).strip() or None
+
+            if kept == 0:
+                # First match: replace the AI-generated question in place.
+                db.execute(
+                    """UPDATE questions
+                       SET question_text = ?,
+                           answer_text = ?,
+                           question_source = 'past_paper',
+                           question_source_detail = ?,
+                           options_json = ?,
+                           updated_at = datetime('now')
+                       WHERE id = ?""",
+                    (pp_q["question_text"], pp_q["answer_text"], source_detail,
+                     pp_q["options_json"], ko_q_id),
+                )
+                replaced += 1
+            else:
+                # Extra matches: insert new past-paper rows into the same KO batch,
+                # inheriting the KO question's topic tags and approval state.
+                db.execute(
+                    """INSERT INTO questions
+                       (batch_id, user_id, subject_id, category_id, subcategory_id,
+                        page_number, question_text, answer_text, approved,
+                        question_source, question_source_detail, options_json)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'past_paper', ?, ?)""",
+                    (batch_id, user_id, subject_id,
+                     ko_q["category_id"], ko_q["subcategory_id"],
+                     ko_q["page_number"], pp_q["question_text"], pp_q["answer_text"],
+                     ko_q["approved"], source_detail, pp_q["options_json"]),
+                )
+                inserted += 1
+            kept += 1
 
     db.commit()
-    print(f"[match_ko_to_past_papers] replaced {len(used_pp_ids)} questions with past paper equivalents")
+    print(f"[match_ko_to_past_papers] replaced {replaced}, inserted {inserted} extra past-paper questions")
 
 
 def process_batch(

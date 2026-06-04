@@ -193,6 +193,143 @@ def test_past_paper_question_without_figure_has_no_image(
     assert question["image_id"] is None
 
 
+def _make_pp_batch_with_questions(db_conn, upload, user_id, subject_id, texts,
+                                  exam_board="AQA", exam_year=2023, paper_number="Paper 1"):
+    """Insert a past_paper batch (with exam metadata) + its questions. Returns [pp_ids]."""
+    cur = db_conn.execute(
+        """INSERT INTO upload_batches
+           (user_id, subject_id, filename, pdf_path, page_start, page_end, status,
+            batch_type, exam_board, exam_year, paper_number)
+           VALUES (?, ?, 'pp.pdf', 'pp.pdf', 1, 2, 'completed', 'past_paper', ?, ?, ?)""",
+        (user_id, subject_id, exam_board, exam_year, paper_number),
+    )
+    pp_batch = cur.lastrowid
+    pp_ids = []
+    for t in texts:
+        c = db_conn.execute(
+            """INSERT INTO questions
+               (batch_id, user_id, subject_id, page_number, question_text, answer_text,
+                approved, question_source)
+               VALUES (?, ?, ?, 1, ?, 'ans', 1, 'past_paper')""",
+            (pp_batch, user_id, subject_id, t),
+        )
+        pp_ids.append(c.lastrowid)
+    db_conn.commit()
+    return pp_ids
+
+
+def _make_ko_question(db_conn, batch_id, user_id, subject_id, text="KO q"):
+    c = db_conn.execute(
+        """INSERT INTO questions
+           (batch_id, user_id, subject_id, page_number, question_text, answer_text,
+            approved, question_source)
+           VALUES (?, ?, ?, 1, ?, 'ko ans', 0, 'ai_generated')""",
+        (batch_id, user_id, subject_id, text),
+    )
+    db_conn.commit()
+    return c.lastrowid
+
+
+def test_blend_keeps_multiple_matches(
+    isolated_db, db_conn, regular_user, make_subject, make_batch, monkeypatch
+):
+    monkeypatch.setattr(upload, "DB_PATH", isolated_db)
+    user_id, _ = regular_user
+    sid = make_subject()
+    ko_batch = make_batch(user_id, sid)
+    ko_q = _make_ko_question(db_conn, ko_batch, user_id, sid)
+    pp_ids = _make_pp_batch_with_questions(
+        db_conn, upload, user_id, sid, ["pp A", "pp B", "pp C"])
+
+    def fake_match(ko_list, pp_list):
+        return [{"ko_question_id": ko_q, "past_paper_question_id": pid} for pid in pp_ids]
+    monkeypatch.setattr(upload, "match_ko_to_past_papers", fake_match)
+
+    upload._match_and_replace_with_past_papers(ko_batch, user_id, sid, db_conn)
+
+    rows = db_conn.execute(
+        "SELECT question_text, question_source, question_source_detail "
+        "FROM questions WHERE batch_id = ? ORDER BY id", (ko_batch,)
+    ).fetchall()
+    assert len(rows) == 3                       # 1 replaced + 2 inserted
+    assert all(r["question_source"] == "past_paper" for r in rows)
+    assert all(r["question_source_detail"] == "AQA 2023 Paper 1" for r in rows)
+    assert {r["question_text"] for r in rows} == {"pp A", "pp B", "pp C"}
+
+
+def test_blend_caps_at_three(
+    isolated_db, db_conn, regular_user, make_subject, make_batch, monkeypatch
+):
+    monkeypatch.setattr(upload, "DB_PATH", isolated_db)
+    user_id, _ = regular_user
+    sid = make_subject()
+    ko_batch = make_batch(user_id, sid)
+    ko_q = _make_ko_question(db_conn, ko_batch, user_id, sid)
+    pp_ids = _make_pp_batch_with_questions(
+        db_conn, upload, user_id, sid, ["a", "b", "c", "d", "e"])
+
+    monkeypatch.setattr(upload, "match_ko_to_past_papers",
+        lambda k, p: [{"ko_question_id": ko_q, "past_paper_question_id": pid} for pid in pp_ids])
+
+    upload._match_and_replace_with_past_papers(ko_batch, user_id, sid, db_conn)
+
+    n = db_conn.execute(
+        "SELECT COUNT(*) c FROM questions WHERE batch_id = ?", (ko_batch,)
+    ).fetchone()["c"]
+    assert n == 3   # capped
+
+
+def test_blend_single_match_is_replace_only(
+    isolated_db, db_conn, regular_user, make_subject, make_batch, monkeypatch
+):
+    monkeypatch.setattr(upload, "DB_PATH", isolated_db)
+    user_id, _ = regular_user
+    sid = make_subject()
+    ko_batch = make_batch(user_id, sid)
+    ko_q = _make_ko_question(db_conn, ko_batch, user_id, sid)
+    pp_ids = _make_pp_batch_with_questions(db_conn, upload, user_id, sid, ["only one"])
+
+    monkeypatch.setattr(upload, "match_ko_to_past_papers",
+        lambda k, p: [{"ko_question_id": ko_q, "past_paper_question_id": pp_ids[0]}])
+
+    upload._match_and_replace_with_past_papers(ko_batch, user_id, sid, db_conn)
+
+    rows = db_conn.execute(
+        "SELECT id, question_text, question_source FROM questions WHERE batch_id = ?",
+        (ko_batch,)
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["id"] == ko_q                 # same row, replaced in place
+    assert rows[0]["question_source"] == "past_paper"
+    assert rows[0]["question_text"] == "only one"
+
+
+def test_blend_dedupes_pp_across_ko_questions(
+    isolated_db, db_conn, regular_user, make_subject, make_batch, monkeypatch
+):
+    monkeypatch.setattr(upload, "DB_PATH", isolated_db)
+    user_id, _ = regular_user
+    sid = make_subject()
+    ko_batch = make_batch(user_id, sid)
+    ko_a = _make_ko_question(db_conn, ko_batch, user_id, sid, "KO A")
+    ko_b = _make_ko_question(db_conn, ko_batch, user_id, sid, "KO B")
+    pp_ids = _make_pp_batch_with_questions(db_conn, upload, user_id, sid, ["shared pp"])
+
+    # Both KO questions claim the same single past-paper question.
+    monkeypatch.setattr(upload, "match_ko_to_past_papers", lambda k, p: [
+        {"ko_question_id": ko_a, "past_paper_question_id": pp_ids[0]},
+        {"ko_question_id": ko_b, "past_paper_question_id": pp_ids[0]},
+    ])
+
+    upload._match_and_replace_with_past_papers(ko_batch, user_id, sid, db_conn)
+
+    pp_in_ko = db_conn.execute(
+        "SELECT COUNT(*) c FROM questions WHERE batch_id = ? AND question_source = 'past_paper'",
+        (ko_batch,)
+    ).fetchone()["c"]
+    assert pp_in_ko == 1   # used once; the second KO question keeps its AI question
+
+
 def test_matching_prompt_supports_multiple_and_formats():
     from backend.prompts.matching import MATCHING_PROMPT
     # Format-string integrity: both placeholders must survive and no stray braces.
