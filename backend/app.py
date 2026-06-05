@@ -19,7 +19,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-APP_VERSION = "1.4.1"
+APP_VERSION = "1.5.0"
 
 app = FastAPI(title="RevisionAid", version=APP_VERSION, lifespan=lifespan)
 
