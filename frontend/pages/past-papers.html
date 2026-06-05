@@ -15,6 +15,10 @@ Alpine.data('pastPapersPage', () => ({
     editing: null,
     editForm: {},
     _redetectingId: null,   // id of the paper currently being re-detected (null = none)
+    selectedPapers: [],
+    importing: false,
+    importResult: null,
+    importError: '',
 
     async init() {
         this.loading = true;
@@ -32,7 +36,7 @@ Alpine.data('pastPapersPage', () => ({
 
     async loadSubject() {
         this.loading = true;
-        this.expanded = {}; this.questions = {}; this.selected = {};
+        this.expanded = {}; this.questions = {}; this.selected = {}; this.selectedPapers = [];
         this.papers = await API.get(`/past-papers?subject_id=${this.subjectId}`);
         this.categories = await API.get(`/categories?subject_id=${this.subjectId}`);
         this.loading = false;
@@ -165,6 +169,52 @@ Alpine.data('pastPapersPage', () => ({
         q.image_filename = null; q.image_id = null;
     },
 
+    toggleSelectPaper(id) {
+        const i = this.selectedPapers.indexOf(id);
+        if (i === -1) this.selectedPapers.push(id); else this.selectedPapers.splice(i, 1);
+    },
+    allPapersSelected() {
+        return this.papers.length > 0 && this.selectedPapers.length === this.papers.length;
+    },
+    toggleSelectAllPapers() {
+        this.selectedPapers = this.allPapersSelected() ? [] : this.papers.map(p => p.id);
+    },
+    exportSelected() {
+        if (!this.selectedPapers.length) return;
+        const url = '/api/past-papers/export?ids=' + this.selectedPapers.join(',');
+        const token = API.getToken();
+        fetch(url, { headers: { Authorization: 'Bearer ' + token } })
+            .then(r => { if (!r.ok) throw new Error('Export failed'); return r.blob().then(b => ({ b, r })); })
+            .then(({ b, r }) => {
+                const cd = r.headers.get('content-disposition') || '';
+                const m = cd.match(/filename="?([^"]+)"?/);
+                const name = m ? m[1] : 'past-papers.zip';
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(b);
+                a.download = name;
+                a.click();
+                URL.revokeObjectURL(a.href);
+            })
+            .catch(e => { this.importError = e.message; });
+    },
+    async importFile(ev) {
+        const f = ev.target.files[0];
+        if (!f) return;
+        this.importing = true; this.importResult = null; this.importError = '';
+        try {
+            const fd = new FormData();
+            fd.append('file', f);
+            const body = await API.upload('/past-papers/import', fd);
+            this.importResult = body;
+            await this.loadSubject();
+        } catch (e) {
+            this.importError = e.message;
+        } finally {
+            this.importing = false;
+            ev.target.value = '';
+        }
+    },
+
     async redetectMultiResponse(paper) {
         if (this._redetectingId !== null) return;   // one at a time
         this._redetectingId = paper.id;
@@ -204,10 +254,28 @@ Alpine.data('pastPapersPage', () => ({
         No past papers for this subject yet. Upload one from the Upload page.
     </div>
 
+    <div x-show="!loading" class="flex items-center gap-2 mb-3">
+        <button @click="exportSelected()" :disabled="selectedPapers.length === 0"
+                class="px-3 py-1.5 rounded-lg text-sm font-medium bg-blue-600 text-white disabled:opacity-40 disabled:cursor-not-allowed">
+            Export selected (<span x-text="selectedPapers.length"></span>)
+        </button>
+        <button @click="toggleSelectAllPapers()"
+                class="px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-100 text-gray-700 hover:bg-gray-200">
+            <span x-text="allPapersSelected() ? 'Deselect all' : 'Select all'"></span>
+        </button>
+        <label class="px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-100 text-gray-700 cursor-pointer hover:bg-gray-200">
+            Import&#x2026;
+            <input type="file" accept=".zip" class="hidden" @change="importFile($event)">
+        </label>
+        <span x-show="importing" class="text-sm text-gray-500">Importing&#x2026;</span>
+    </div>
+
     <template x-for="p in papers" :key="p.id">
         <div class="border rounded-lg mb-3 bg-white shadow-sm">
             <div class="flex items-center justify-between p-3">
-                <button @click="toggle(p.id)" class="flex items-start gap-2 text-left min-w-0">
+                <input type="checkbox" :checked="selectedPapers.includes(p.id)" @change="toggleSelectPaper(p.id)"
+                       class="w-4 h-4 rounded border-gray-300 mr-2 shrink-0">
+                <button @click="toggle(p.id)" class="flex items-start gap-2 text-left min-w-0 flex-1">
                     <span class="mt-0.5" x-text="expanded[p.id] ? '▼' : '▶'"></span>
                     <span class="min-w-0">
                         <span class="font-semibold" x-text="paperLabel(p)"></span>
@@ -317,6 +385,49 @@ Alpine.data('pastPapersPage', () => ({
             </div>
         </div>
     </template>
+
+    <!-- Import result modal -->
+    <div x-show="importResult || importError" style="display:none"
+         class="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div class="absolute inset-0 bg-gray-900/50" @click="importResult = null; importError = ''"></div>
+        <div class="relative bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
+            <h3 class="text-lg font-semibold mb-3">Import results</h3>
+            <template x-if="importError">
+                <p class="text-red-600 text-sm" x-text="importError"></p>
+            </template>
+            <template x-if="importResult">
+                <div class="space-y-2 text-sm">
+                    <p class="text-green-700">
+                        Imported <span x-text="importResult.imported.length"></span> paper(s).
+                    </p>
+                    <template x-if="importResult.skipped.length">
+                        <div>
+                            <p class="text-amber-700 font-medium">Skipped:</p>
+                            <ul class="list-disc list-inside text-gray-600">
+                                <template x-for="s in importResult.skipped" :key="s.filename">
+                                    <li><span x-text="s.filename"></span> &#x2014; <span x-text="s.reason"></span></li>
+                                </template>
+                            </ul>
+                        </div>
+                    </template>
+                    <template x-if="importResult.errors && importResult.errors.length">
+                        <div>
+                            <p class="text-red-700 font-medium">Errors:</p>
+                            <ul class="list-disc list-inside text-gray-600">
+                                <template x-for="e in importResult.errors" :key="e.slug">
+                                    <li><span x-text="e.slug"></span> &#x2014; <span x-text="e.error"></span></li>
+                                </template>
+                            </ul>
+                        </div>
+                    </template>
+                </div>
+            </template>
+            <div class="mt-4 text-right">
+                <button @click="importResult = null; importError = ''"
+                        class="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium">Close</button>
+            </div>
+        </div>
+    </div>
 
     <!-- Re-crop modal -->
     <template x-if="recrop.open">
