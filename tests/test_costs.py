@@ -41,7 +41,7 @@ def _make_batch(db, user_id, subject_id, category_id=None, subcategory_id=None,
 
 
 def test_history_returns_new_fields(client, db_conn):
-    """GET /costs/history returns batch_type, source_type, is_handwritten, tier,
+    """GET /api/costs/history returns batch_type, source_type, is_handwritten, tier,
     category_name, and subcategory_name."""
     uid, token = _insert_user(db_conn, "histuser")
     sid = _make_subject(db_conn)
@@ -55,7 +55,7 @@ def test_history_returns_new_fields(client, db_conn):
     )
 
     resp = client.get(
-        "/costs/history",
+        "/api/costs/history",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 200
@@ -77,7 +77,7 @@ def test_history_nulls_when_no_category(client, db_conn):
     _make_batch(db_conn, uid, sid)
 
     resp = client.get(
-        "/costs/history",
+        "/api/costs/history",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 200
@@ -96,7 +96,7 @@ def test_history_handwritten_flag(client, db_conn):
     _make_batch(db_conn, uid, sid, source_type="images", is_handwritten=1)
 
     resp = client.get(
-        "/costs/history",
+        "/api/costs/history",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 200
