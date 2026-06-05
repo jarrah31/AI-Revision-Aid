@@ -165,3 +165,106 @@ def test_build_archive_dedupes_identical_filenames(db_conn, regular_user, make_s
     zf = zipfile.ZipFile(io.BytesIO(blob))
     slugs = [p["slug"] for p in json.loads(zf.read("manifest.json"))["papers"]]
     assert len(set(slugs)) == 2   # collision suffix applied
+
+
+def _zip_from(manifest, papers):
+    """papers: list of (slug, paper_dict, {rel_path: bytes})."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(manifest))
+        for slug, pdict, files in papers:
+            zf.writestr(f"papers/{slug}/paper.json", json.dumps(pdict))
+            for rel, data in files.items():
+                zf.writestr(f"papers/{slug}/images/{rel}", data)
+    return buf.getvalue()
+
+
+def test_read_archive_parses_papers():
+    manifest = {"format": "revisionaid-pastpapers", "version": 1,
+                "exported_at": "2026-06-05",
+                "papers": [{"slug": "s1", "filename": "P1.PDF"}]}
+    pdict = {"batch": {"filename": "P1.PDF"}, "images": [], "questions": []}
+    blob = _zip_from(manifest, [("s1", pdict, {"page_1_full.png": b"X"})])
+    parsed = paper_archive.read_archive(blob)
+    assert len(parsed["papers"]) == 1
+    assert parsed["papers"][0]["slug"] == "s1"
+    assert parsed["papers"][0]["data"]["batch"]["filename"] == "P1.PDF"
+    assert parsed["papers"][0]["files"]["page_1_full.png"] == b"X"
+
+
+def test_read_archive_rejects_non_zip():
+    with pytest.raises(ValueError):
+        paper_archive.read_archive(b"not a zip")
+
+
+def test_read_archive_rejects_bad_format():
+    blob = _zip_from({"format": "something-else", "version": 1, "papers": []}, [])
+    with pytest.raises(ValueError):
+        paper_archive.read_archive(blob)
+
+
+def test_read_archive_rejects_unsupported_version():
+    blob = _zip_from({"format": "revisionaid-pastpapers", "version": 999, "papers": []}, [])
+    with pytest.raises(ValueError):
+        paper_archive.read_archive(blob)
+
+
+def test_read_archive_rejects_path_traversal():
+    manifest = {"format": "revisionaid-pastpapers", "version": 1, "papers": [{"slug": "s1"}]}
+    pdict = {"batch": {"filename": "P1.PDF"}, "images": [], "questions": []}
+    blob = _zip_from(manifest, [("s1", pdict, {"../../evil.png": b"X"})])
+    with pytest.raises(ValueError):
+        paper_archive.read_archive(blob)
+
+
+def test_read_archive_rejects_missing_manifest():
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("papers/s1/paper.json", json.dumps({"batch": {}}))
+    with pytest.raises(ValueError):
+        paper_archive.read_archive(buf.getvalue())
+
+
+def test_read_archive_rejects_invalid_manifest_json():
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("manifest.json", "{not valid json")
+    with pytest.raises(ValueError):
+        paper_archive.read_archive(buf.getvalue())
+
+
+def test_read_archive_rejects_missing_paper_json():
+    manifest = {"format": "revisionaid-pastpapers", "version": 1,
+                "papers": [{"slug": "s1", "filename": "P1.PDF"}]}
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(manifest))
+        # no papers/s1/paper.json written
+    with pytest.raises(ValueError):
+        paper_archive.read_archive(buf.getvalue())
+
+
+def test_safe_rel_rejects_absolute_path():
+    import pytest as _pytest
+    with _pytest.raises(ValueError):
+        paper_archive._safe_rel("/etc/passwd")
+    assert paper_archive._safe_rel("a/b/c.png") == "a/b/c.png"
+
+
+def test_read_archive_rejects_missing_slug():
+    manifest = {"format": "revisionaid-pastpapers", "version": 1, "papers": [{"filename": "P1.PDF"}]}
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(manifest))
+    with pytest.raises(ValueError):
+        paper_archive.read_archive(buf.getvalue())
+
+
+def test_read_archive_rejects_bad_paper_json():
+    manifest = {"format": "revisionaid-pastpapers", "version": 1, "papers": [{"slug": "s1"}]}
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(manifest))
+        zf.writestr("papers/s1/paper.json", "{bad json")
+    with pytest.raises(ValueError):
+        paper_archive.read_archive(buf.getvalue())

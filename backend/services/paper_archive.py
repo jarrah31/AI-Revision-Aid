@@ -152,3 +152,56 @@ def build_archive(batch_ids: list[int], user_id: int, db: sqlite3.Connection) ->
     else:
         download_name = f"RevisionAid-PastPapers-{today.isoformat()}.zip"
     return buf.getvalue(), download_name
+
+
+SUPPORTED_VERSION = 1
+
+
+def _safe_rel(rel: str) -> str:
+    """Reject path-traversal / absolute / dot entries; return the normalised relative path."""
+    posix = rel.replace("\\", "/")
+    parts = posix.split("/")
+    if posix.startswith("/") or ".." in parts or "." in parts:
+        raise ValueError(f"Unsafe path in archive: {rel}")
+    return posix
+
+
+def read_archive(zip_bytes: bytes) -> dict:
+    """Validate and parse an export zip into {manifest, papers:[{slug,data,files}]}."""
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
+    except zipfile.BadZipFile:
+        raise ValueError("Not a valid .zip archive")
+
+    try:
+        manifest = json.loads(zf.read("manifest.json"))
+    except KeyError:
+        raise ValueError("Archive is missing manifest.json")
+    except json.JSONDecodeError:
+        raise ValueError("Archive manifest.json is not valid JSON")
+
+    if manifest.get("format") != "revisionaid-pastpapers":
+        raise ValueError("Not a RevisionAid past-paper archive")
+    if manifest.get("version") != SUPPORTED_VERSION:
+        raise ValueError(f"Unsupported archive version: {manifest.get('version')}")
+
+    papers = []
+    for entry in manifest.get("papers", []):
+        slug = entry.get("slug")
+        if not slug:
+            raise ValueError("Manifest paper entry missing 'slug'")
+        try:
+            data = json.loads(zf.read(f"papers/{slug}/paper.json"))
+        except KeyError:
+            raise ValueError(f"Archive missing paper.json for '{slug}'")
+        except json.JSONDecodeError:
+            raise ValueError(f"Invalid paper.json for '{slug}'")
+        prefix = f"papers/{slug}/images/"
+        files = {}
+        for name in zf.namelist():
+            if name.startswith(prefix) and not name.endswith("/"):
+                rel = _safe_rel(name[len(prefix):])
+                files[rel] = zf.read(name)
+        papers.append({"slug": slug, "data": data, "files": files})
+
+    return {"manifest": manifest, "papers": papers}
