@@ -101,3 +101,67 @@ def test_serialize_paper_question_without_image_has_null_index(db_conn, regular_
     db_conn.commit()
     data = paper_archive.serialize_paper(bid, user_id, db_conn)
     assert data["questions"][0]["image_index"] is None
+
+
+def test_build_archive_single_paper_filename_and_contents(db_conn, regular_user, make_subject):
+    user_id, _ = regular_user
+    sid = make_subject("Biology")
+    bid = _make_past_paper(db_conn, user_id, sid,
+                           filename="Biology-AQA-84611F-QP-JUN23.PDF")
+    _add_image(db_conn, bid, rel="page_25_img_0.png", write_bytes=b"CROP")
+    # full-page PNG present on disk but NOT in images table -> must still be bundled
+    (Path(database.DATA_DIR) / "images" / f"batch_{bid}" / "page_25_full.png").write_bytes(b"FULL")
+
+    blob, filename = paper_archive.build_archive([bid], user_id, db_conn)
+
+    assert filename == "Biology-AQA-84611F-QP-JUN23.revaid.zip"
+    zf = zipfile.ZipFile(io.BytesIO(blob))
+    names = zf.namelist()
+    manifest = json.loads(zf.read("manifest.json"))
+    assert manifest["format"] == "revisionaid-pastpapers"
+    assert manifest["version"] == 1
+    assert len(manifest["papers"]) == 1
+    slug = manifest["papers"][0]["slug"]
+    assert f"papers/{slug}/paper.json" in names
+    assert f"papers/{slug}/images/page_25_img_0.png" in names
+    assert f"papers/{slug}/images/page_25_full.png" in names   # full page bundled
+    assert zf.read(f"papers/{slug}/images/page_25_full.png") == b"FULL"
+
+
+def test_build_archive_multi_paper_combined_name(db_conn, regular_user, make_subject):
+    user_id, _ = regular_user
+    sid = make_subject("Biology")
+    b1 = _make_past_paper(db_conn, user_id, sid, filename="P1.PDF", paper_number="Paper 1")
+    b2 = _make_past_paper(db_conn, user_id, sid, filename="P2.PDF", paper_number="Paper 2")
+    blob, filename = paper_archive.build_archive([b1, b2], user_id, db_conn)
+    assert filename.startswith("RevisionAid-PastPapers-") and filename.endswith(".zip")
+    zf = zipfile.ZipFile(io.BytesIO(blob))
+    assert len(json.loads(zf.read("manifest.json"))["papers"]) == 2
+
+
+def test_build_archive_skips_foreign_paper(db_conn, regular_user, second_user, make_subject):
+    user_id, _ = regular_user
+    other_id, _ = second_user
+    sid = make_subject("Biology")
+    mine = _make_past_paper(db_conn, user_id, sid, filename="Mine.PDF")
+    theirs = _make_past_paper(db_conn, other_id, sid, filename="Theirs.PDF")
+    blob, _ = paper_archive.build_archive([mine, theirs], user_id, db_conn)
+    zf = zipfile.ZipFile(io.BytesIO(blob))
+    assert len(json.loads(zf.read("manifest.json"))["papers"]) == 1
+
+
+def test_build_archive_no_valid_ids_raises(db_conn, regular_user, make_subject):
+    user_id, _ = regular_user
+    with pytest.raises(ValueError):
+        paper_archive.build_archive([99999], user_id, db_conn)
+
+
+def test_build_archive_dedupes_identical_filenames(db_conn, regular_user, make_subject):
+    user_id, _ = regular_user
+    sid = make_subject("Biology")
+    b1 = _make_past_paper(db_conn, user_id, sid, filename="P1.PDF", paper_number="Paper 1")
+    b2 = _make_past_paper(db_conn, user_id, sid, filename="P1.PDF", paper_number="Paper 2")
+    blob, _ = paper_archive.build_archive([b1, b2], user_id, db_conn)
+    zf = zipfile.ZipFile(io.BytesIO(blob))
+    slugs = [p["slug"] for p in json.loads(zf.read("manifest.json"))["papers"]]
+    assert len(set(slugs)) == 2   # collision suffix applied
