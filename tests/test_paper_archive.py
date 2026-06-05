@@ -268,3 +268,97 @@ def test_read_archive_rejects_bad_paper_json():
         zf.writestr("papers/s1/paper.json", "{bad json")
     with pytest.raises(ValueError):
         paper_archive.read_archive(buf.getvalue())
+
+
+def test_import_paper_round_trip(db_conn, regular_user, make_subject):
+    user_id, _ = regular_user
+    sid = make_subject("Biology")
+    bid = _make_past_paper(db_conn, user_id, sid, filename="Bio-QP.PDF")
+    img_id = _add_image(db_conn, bid, rel="page_25_img_0.png", write_bytes=b"CROP")
+    q = db_conn.execute(
+        """INSERT INTO questions
+           (batch_id, user_id, subject_id, page_number, question_text, answer_text,
+            approved, question_source, question_ref, image_id)
+           VALUES (?, ?, ?, 25, 'Q?', 'A.', 1, 'past_paper', '1a', ?)""",
+        (bid, user_id, sid, img_id),
+    )
+    db_conn.commit()
+    db_conn.execute(
+        "INSERT INTO mcq_options (question_id, option_text, is_correct) VALUES (?, 'A.', 1)",
+        (q.lastrowid,),
+    )
+    db_conn.commit()
+
+    parsed = paper_archive.read_archive(paper_archive.build_archive([bid], user_id, db_conn)[0])
+    paper = parsed["papers"][0]
+
+    # Wipe original so the import is a true recreation.
+    db_conn.execute("DELETE FROM upload_batches WHERE id = ?", (bid,))
+    db_conn.commit()
+
+    result = paper_archive.import_paper(paper, user_id, db_conn)
+
+    assert result["status"] == "imported"
+    new_bid = result["batch_id"]
+    new = db_conn.execute("SELECT * FROM upload_batches WHERE id = ?", (new_bid,)).fetchone()
+    assert new["batch_type"] == "past_paper"
+    assert new["pdf_path"] == "imported"
+    assert new["user_id"] == user_id
+    nq = db_conn.execute("SELECT * FROM questions WHERE batch_id = ?", (new_bid,)).fetchall()
+    assert len(nq) == 1 and nq[0]["question_ref"] == "1a"
+    nimg = db_conn.execute("SELECT * FROM images WHERE id = ?", (nq[0]["image_id"],)).fetchone()
+    assert nimg["batch_id"] == new_bid
+    assert nimg["filename"] == f"batch_{new_bid}/page_25_img_0.png"
+    assert (Path(database.DATA_DIR) / "images" / f"batch_{new_bid}" / "page_25_img_0.png").read_bytes() == b"CROP"
+    nopt = db_conn.execute(
+        "SELECT option_text FROM mcq_options WHERE question_id = ?", (nq[0]["id"],)
+    ).fetchall()
+    assert [o["option_text"] for o in nopt] == ["A."]
+
+
+def test_import_paper_creates_missing_subject(db_conn, regular_user, make_subject):
+    user_id, _ = regular_user
+    sid = make_subject("Biology")
+    bid = _make_past_paper(db_conn, user_id, sid, filename="Bio-QP.PDF")
+    parsed = paper_archive.read_archive(paper_archive.build_archive([bid], user_id, db_conn)[0])
+    db_conn.execute("DELETE FROM upload_batches WHERE id = ?", (bid,))
+    db_conn.execute("DELETE FROM subjects WHERE id = ?", (sid,))
+    db_conn.commit()
+
+    result = paper_archive.import_paper(parsed["papers"][0], user_id, db_conn)
+    assert result["status"] == "imported"
+    sub = db_conn.execute("SELECT id FROM subjects WHERE name = 'Biology'").fetchone()
+    assert sub is not None
+
+
+def test_import_paper_skips_duplicate(db_conn, regular_user, make_subject):
+    user_id, _ = regular_user
+    sid = make_subject("Biology")
+    bid = _make_past_paper(db_conn, user_id, sid, filename="Bio-QP.PDF",
+                           exam_board="AQA", exam_year=2023,
+                           paper_number="Paper 1", tier="Foundation")
+    parsed = paper_archive.read_archive(paper_archive.build_archive([bid], user_id, db_conn)[0])
+    result = paper_archive.import_paper(parsed["papers"][0], user_id, db_conn)
+    assert result["status"] == "skipped"
+    assert result["reason"] == "duplicate"
+
+
+def test_import_paper_question_without_image(db_conn, regular_user, make_subject):
+    user_id, _ = regular_user
+    sid = make_subject("Biology")
+    bid = _make_past_paper(db_conn, user_id, sid, filename="NoFig.PDF")
+    db_conn.execute(
+        """INSERT INTO questions
+           (batch_id, user_id, subject_id, page_number, question_text, answer_text,
+            approved, question_source)
+           VALUES (?, ?, ?, 3, 'No figure?', 'Right.', 1, 'past_paper')""",
+        (bid, user_id, sid),
+    )
+    db_conn.commit()
+    parsed = paper_archive.read_archive(paper_archive.build_archive([bid], user_id, db_conn)[0])
+    db_conn.execute("DELETE FROM upload_batches WHERE id = ?", (bid,))
+    db_conn.commit()
+    result = paper_archive.import_paper(parsed["papers"][0], user_id, db_conn)
+    assert result["status"] == "imported"
+    nq = db_conn.execute("SELECT * FROM questions WHERE batch_id = ?", (result["batch_id"],)).fetchall()
+    assert len(nq) == 1 and nq[0]["image_id"] is None

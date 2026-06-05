@@ -1,6 +1,7 @@
 import io
 import json
 import re
+import shutil
 import sqlite3
 import zipfile
 from datetime import date
@@ -164,6 +165,138 @@ def _safe_rel(rel: str) -> str:
     if posix.startswith("/") or ".." in parts or "." in parts:
         raise ValueError(f"Unsafe path in archive: {rel}")
     return posix
+
+
+def _resolve_subject(name: str, db: sqlite3.Connection) -> int:
+    row = db.execute("SELECT id FROM subjects WHERE name = ?", (name,)).fetchone()
+    if row:
+        return row["id"]
+    cur = db.execute("INSERT INTO subjects (name) VALUES (?)", (name,))
+    return cur.lastrowid
+
+
+def _resolve_category(name, subject_id: int, db: sqlite3.Connection):
+    if not name:
+        return None
+    row = db.execute(
+        "SELECT id FROM categories WHERE subject_id = ? AND name = ?", (subject_id, name)
+    ).fetchone()
+    if row:
+        return row["id"]
+    cur = db.execute(
+        "INSERT INTO categories (subject_id, name) VALUES (?, ?)", (subject_id, name)
+    )
+    return cur.lastrowid
+
+
+def _resolve_subcategory(name, category_id, db: sqlite3.Connection):
+    if not name or category_id is None:
+        return None
+    row = db.execute(
+        "SELECT id FROM subcategories WHERE category_id = ? AND name = ?", (category_id, name)
+    ).fetchone()
+    if row:
+        return row["id"]
+    cur = db.execute(
+        "INSERT INTO subcategories (category_id, name) VALUES (?, ?)", (category_id, name)
+    )
+    return cur.lastrowid
+
+
+def import_paper(paper: dict, user_id: int, db) -> dict:
+    """Import one parsed paper ({slug,data,files}) for user_id. Returns a result dict."""
+    data = paper["data"]
+    files = paper.get("files", {})
+    b = data["batch"]
+
+    # Duplicate check: same board/year/number/tier already owned by this user.
+    dup = db.execute(
+        """SELECT id FROM upload_batches
+           WHERE user_id = ? AND batch_type = 'past_paper'
+             AND IFNULL(exam_board,'') = IFNULL(?, '')
+             AND IFNULL(exam_year,0)  = IFNULL(?, 0)
+             AND IFNULL(paper_number,'') = IFNULL(?, '')
+             AND IFNULL(tier,'') = IFNULL(?, '')""",
+        (user_id, b["exam_board"], b["exam_year"], b["paper_number"], b["tier"]),
+    ).fetchone()
+    if dup:
+        return {"status": "skipped", "reason": "duplicate", "filename": b["filename"]}
+
+    subject_id = _resolve_subject(b["subject_name"], db)
+    category_id = _resolve_category(b.get("category_name"), subject_id, db)
+    subcategory_id = _resolve_subcategory(b.get("subcategory_name"), category_id, db)
+
+    cur = db.execute(
+        """INSERT INTO upload_batches
+           (user_id, subject_id, category_id, subcategory_id, filename, pdf_path,
+            page_start, page_end, status, batch_type, exam_board, exam_year,
+            paper_number, tier, source_type, completed_at)
+           VALUES (?, ?, ?, ?, ?, 'imported', ?, ?, 'completed', 'past_paper',
+                   ?, ?, ?, ?, ?, datetime('now'))""",
+        (user_id, subject_id, category_id, subcategory_id, b["filename"],
+         b["page_start"], b["page_end"], b["exam_board"], b["exam_year"],
+         b["paper_number"], b["tier"], b.get("source_type", "pdf")),
+    )
+    new_bid = cur.lastrowid
+
+    index_to_id = {}
+    for img in data["images"]:
+        icur = db.execute(
+            """INSERT INTO images
+               (batch_id, page_number, filename, description, crop_x, crop_y,
+                crop_w, crop_h, width, height)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (new_bid, img["page_number"], f"batch_{new_bid}/{img['rel_path']}",
+             img["description"], img["crop_x"], img["crop_y"],
+             img["crop_w"], img["crop_h"], img["width"], img["height"]),
+        )
+        index_to_id[img["image_index"]] = icur.lastrowid
+
+    for q in data["questions"]:
+        img_idx = q.get("image_index")
+        image_id = index_to_id.get(img_idx) if img_idx is not None else None
+        qcur = db.execute(
+            """INSERT INTO questions
+               (batch_id, user_id, subject_id, page_number, question_text, answer_text,
+                question_type, difficulty, approved, question_source,
+                question_source_detail, question_ref, source_context, options_json,
+                image_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (new_bid, user_id, subject_id, q["page_number"], q["question_text"],
+             q["answer_text"], q.get("question_type", "factual"),
+             q.get("difficulty", 1), q.get("approved", 1),
+             q.get("question_source", "past_paper"), q.get("question_source_detail"),
+             q.get("question_ref"), q.get("source_context"), q.get("options_json"),
+             image_id),
+        )
+        qid = qcur.lastrowid
+        for opt in q.get("mcq_options", []):
+            db.execute(
+                "INSERT OR IGNORE INTO mcq_options (question_id, option_text, is_correct) VALUES (?, ?, ?)",
+                (qid, opt["option_text"], opt["is_correct"]),
+            )
+
+    # Write figure files only after all DB inserts have succeeded, so a failed
+    # insert leaves nothing on disk. Roll back the files if a write fails.
+    dest_dir = _images_root() / f"batch_{new_bid}"
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        for rel, blob in files.items():
+            safe = _safe_rel(rel)
+            out = dest_dir / safe
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(blob)
+    except Exception:
+        shutil.rmtree(dest_dir, ignore_errors=True)
+        raise
+
+    db.commit()
+    return {
+        "status": "imported",
+        "batch_id": new_bid,
+        "filename": b["filename"],
+        "question_count": len(data["questions"]),
+    }
 
 
 def read_archive(zip_bytes: bytes) -> dict:
