@@ -2,7 +2,7 @@ import io
 import sqlite3
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel
 from PIL import Image
 
@@ -61,6 +61,39 @@ def export_past_papers(
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.post("/import")
+async def import_past_papers(
+    file: UploadFile = File(...),
+    user: dict = Depends(get_current_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Import past papers from a previously exported .zip."""
+    blob = await file.read()
+    try:
+        parsed = paper_archive.read_archive(blob)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    imported, skipped, errors = [], [], []
+    for paper in parsed["papers"]:
+        # Each paper is committed independently inside import_paper, so a
+        # previously-imported paper is already durable when a later one fails.
+        # rollback() here only discards the failed paper's partial inserts
+        # (import_paper also removes its own on-disk files on exception).
+        try:
+            result = paper_archive.import_paper(paper, user["id"], db)
+        except Exception as e:  # pragma: no cover - defensive
+            db.rollback()
+            errors.append({"slug": paper.get("slug"), "error": str(e)})
+            continue
+        if result["status"] == "imported":
+            imported.append(result)
+        else:
+            skipped.append(result)
+
+    return {"imported": imported, "skipped": skipped, "errors": errors}
 
 
 @router.delete("/{batch_id}")

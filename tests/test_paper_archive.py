@@ -384,3 +384,52 @@ def test_export_endpoint_400_when_no_valid_ids(client, user_headers):
 def test_export_endpoint_400_for_non_integer_ids(client, user_headers):
     resp = client.get("/api/past-papers/export?ids=abc", headers=user_headers)
     assert resp.status_code == 400
+
+
+def test_import_endpoint_round_trip(client, db_conn, regular_user, user_headers, make_subject):
+    user_id, _ = regular_user
+    sid = make_subject("Biology")
+    bid = _make_past_paper(db_conn, user_id, sid, filename="Bio-QP.PDF")
+    _add_image(db_conn, bid, rel="page_25_img_0.png", write_bytes=b"CROP")
+    blob = paper_archive.build_archive([bid], user_id, db_conn)[0]
+    db_conn.execute("DELETE FROM upload_batches WHERE id = ?", (bid,))
+    db_conn.commit()
+
+    resp = client.post(
+        "/api/past-papers/import",
+        headers=user_headers,
+        files={"file": ("backup.zip", blob, "application/zip")},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["imported"]) == 1
+    assert body["skipped"] == []
+    new_bid = body["imported"][0]["batch_id"]
+    assert db_conn.execute(
+        "SELECT COUNT(*) c FROM upload_batches WHERE id = ?", (new_bid,)
+    ).fetchone()["c"] == 1
+
+
+def test_import_endpoint_reports_duplicate(client, db_conn, regular_user, user_headers, make_subject):
+    user_id, _ = regular_user
+    sid = make_subject("Biology")
+    bid = _make_past_paper(db_conn, user_id, sid, filename="Bio-QP.PDF")
+    blob = paper_archive.build_archive([bid], user_id, db_conn)[0]
+    resp = client.post(
+        "/api/past-papers/import",
+        headers=user_headers,
+        files={"file": ("backup.zip", blob, "application/zip")},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["imported"] == []
+    assert body["skipped"][0]["reason"] == "duplicate"
+
+
+def test_import_endpoint_rejects_garbage(client, user_headers):
+    resp = client.post(
+        "/api/past-papers/import",
+        headers=user_headers,
+        files={"file": ("x.zip", b"not a zip", "application/zip")},
+    )
+    assert resp.status_code == 400
