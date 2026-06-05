@@ -2,12 +2,13 @@ import io
 import sqlite3
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 from PIL import Image
 
 from backend.auth import get_current_user
 from backend.database import get_db
+from backend.services import paper_archive
 from backend.services.image_service import delete_batch_images, delete_batch_pdf
 from backend.services.multi_response_service import detect_and_store_multi_response
 from backend.services.pdf_processor import crop_section_to_bytes
@@ -36,6 +37,30 @@ def list_past_papers(
         (user["id"], subject_id),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+@router.get("/export")
+def export_past_papers(
+    ids: str = Query(..., description="Comma-separated past-paper batch ids"),
+    user: dict = Depends(get_current_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Export the user's selected past papers as a downloadable .zip."""
+    try:
+        batch_ids = [int(x) for x in ids.split(",") if x.strip()]
+    except ValueError:
+        raise HTTPException(status_code=400, detail="ids must be comma-separated integers")
+    if not batch_ids:
+        raise HTTPException(status_code=400, detail="No paper ids provided")
+    try:
+        blob, filename = paper_archive.build_archive(batch_ids, user["id"], db)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return Response(
+        content=blob,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.delete("/{batch_id}")

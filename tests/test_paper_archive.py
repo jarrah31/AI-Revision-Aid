@@ -362,3 +362,25 @@ def test_import_paper_question_without_image(db_conn, regular_user, make_subject
     assert result["status"] == "imported"
     nq = db_conn.execute("SELECT * FROM questions WHERE batch_id = ?", (result["batch_id"],)).fetchall()
     assert len(nq) == 1 and nq[0]["image_id"] is None
+
+
+def test_export_endpoint_streams_zip(client, db_conn, regular_user, user_headers, make_subject):
+    user_id, _ = regular_user
+    sid = make_subject("Biology")
+    bid = _make_past_paper(db_conn, user_id, sid, filename="Bio-QP.PDF")
+    resp = client.get(f"/api/past-papers/export?ids={bid}", headers=user_headers)
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/zip"
+    assert "Bio-QP.revaid.zip" in resp.headers["content-disposition"]
+    zf = zipfile.ZipFile(io.BytesIO(resp.content))
+    assert "manifest.json" in zf.namelist()
+
+
+def test_export_endpoint_400_when_no_valid_ids(client, user_headers):
+    resp = client.get("/api/past-papers/export?ids=99999", headers=user_headers)
+    assert resp.status_code == 400
+
+
+def test_export_endpoint_400_for_non_integer_ids(client, user_headers):
+    resp = client.get("/api/past-papers/export?ids=abc", headers=user_headers)
+    assert resp.status_code == 400
