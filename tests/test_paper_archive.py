@@ -433,3 +433,44 @@ def test_import_endpoint_rejects_garbage(client, user_headers):
         files={"file": ("x.zip", b"not a zip", "application/zip")},
     )
     assert resp.status_code == 400
+
+
+def test_import_endpoint_recreates_multiple_papers(client, db_conn, regular_user,
+                                                   user_headers, make_subject):
+    user_id, _ = regular_user
+    sid = make_subject("Biology")
+    b1 = _make_past_paper(db_conn, user_id, sid, filename="P1.PDF", paper_number="Paper 1")
+    b2 = _make_past_paper(db_conn, user_id, sid, filename="P2.PDF", paper_number="Paper 2")
+    blob = paper_archive.build_archive([b1, b2], user_id, db_conn)[0]
+    # Wipe originals so the combined archive is a true recreation of both papers.
+    db_conn.execute("DELETE FROM upload_batches WHERE id IN (?, ?)", (b1, b2))
+    db_conn.commit()
+
+    resp = client.post(
+        "/api/past-papers/import",
+        headers=user_headers,
+        files={"file": ("backup.zip", blob, "application/zip")},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["imported"]) == 2
+    assert body["skipped"] == [] and body["errors"] == []
+    numbers = {
+        r["paper_number"]
+        for r in db_conn.execute(
+            "SELECT paper_number FROM upload_batches WHERE user_id = ? AND batch_type = 'past_paper'",
+            (user_id,),
+        ).fetchall()
+    }
+    assert numbers == {"Paper 1", "Paper 2"}
+
+
+def test_build_archive_excludes_non_past_paper_batch(db_conn, regular_user, make_subject, make_batch):
+    user_id, _ = regular_user
+    sid = make_subject("Biology")
+    pp = _make_past_paper(db_conn, user_id, sid, filename="Exam.PDF")
+    ko = make_batch(user_id, sid, filename="Notes.pdf")  # defaults to knowledge_organiser
+    blob, _ = paper_archive.build_archive([pp, ko], user_id, db_conn)
+    zf = zipfile.ZipFile(io.BytesIO(blob))
+    papers = json.loads(zf.read("manifest.json"))["papers"]
+    assert [p["filename"] for p in papers] == ["Exam.PDF"]  # KO batch silently excluded
