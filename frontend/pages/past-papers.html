@@ -18,7 +18,7 @@ Alpine.data('pastPapersPage', () => ({
     selectedPapers: [],
     importing: false,
     importResult: null,
-    importError: '',
+    transferError: '',   // shown in the results modal for export OR import failures
 
     async init() {
         this.loading = true;
@@ -179,28 +179,34 @@ Alpine.data('pastPapersPage', () => ({
     toggleSelectAllPapers() {
         this.selectedPapers = this.allPapersSelected() ? [] : this.papers.map(p => p.id);
     },
-    exportSelected() {
+    async exportSelected() {
         if (!this.selectedPapers.length) return;
+        this.transferError = '';
         const url = '/api/past-papers/export?ids=' + this.selectedPapers.join(',');
-        const token = API.getToken();
-        fetch(url, { headers: { Authorization: 'Bearer ' + token } })
-            .then(r => { if (!r.ok) throw new Error('Export failed'); return r.blob().then(b => ({ b, r })); })
-            .then(({ b, r }) => {
-                const cd = r.headers.get('content-disposition') || '';
-                const m = cd.match(/filename="?([^"]+)"?/);
-                const name = m ? m[1] : 'past-papers.zip';
-                const a = document.createElement('a');
-                a.href = URL.createObjectURL(b);
-                a.download = name;
-                a.click();
-                URL.revokeObjectURL(a.href);
-            })
-            .catch(e => { this.importError = e.message; });
+        try {
+            const r = await fetch(url, { headers: { Authorization: 'Bearer ' + API.getToken() } });
+            if (r.status === 401) { API.clearToken(); window.location.hash = '#login'; return; }
+            if (!r.ok) {
+                const err = await r.json().catch(() => ({ detail: 'Export failed' }));
+                throw new Error(err.detail || 'Export failed');
+            }
+            const b = await r.blob();
+            const cd = r.headers.get('content-disposition') || '';
+            const m = cd.match(/filename="?([^"]+)"?/);
+            const name = m ? m[1] : 'past-papers.zip';
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(b);
+            a.download = name;
+            a.click();
+            URL.revokeObjectURL(a.href);
+        } catch (e) {
+            this.transferError = e.message;
+        }
     },
     async importFile(ev) {
         const f = ev.target.files[0];
         if (!f) return;
-        this.importing = true; this.importResult = null; this.importError = '';
+        this.importing = true; this.importResult = null; this.transferError = '';
         try {
             const fd = new FormData();
             fd.append('file', f);
@@ -208,7 +214,7 @@ Alpine.data('pastPapersPage', () => ({
             this.importResult = body;
             await this.loadSubject();
         } catch (e) {
-            this.importError = e.message;
+            this.transferError = e.message;
         } finally {
             this.importing = false;
             ev.target.value = '';
@@ -386,14 +392,14 @@ Alpine.data('pastPapersPage', () => ({
         </div>
     </template>
 
-    <!-- Import result modal -->
-    <div x-show="importResult || importError" style="display:none"
+    <!-- Export / import result modal -->
+    <div x-show="importResult || transferError" style="display:none"
          class="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div class="absolute inset-0 bg-gray-900/50" @click="importResult = null; importError = ''"></div>
+        <div class="absolute inset-0 bg-gray-900/50" @click="importResult = null; transferError = ''"></div>
         <div class="relative bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
-            <h3 class="text-lg font-semibold mb-3">Import results</h3>
-            <template x-if="importError">
-                <p class="text-red-600 text-sm" x-text="importError"></p>
+            <h3 class="text-lg font-semibold mb-3" x-text="importResult ? 'Import results' : 'Something went wrong'"></h3>
+            <template x-if="transferError">
+                <p class="text-red-600 text-sm" x-text="transferError"></p>
             </template>
             <template x-if="importResult">
                 <div class="space-y-2 text-sm">
@@ -423,7 +429,7 @@ Alpine.data('pastPapersPage', () => ({
                 </div>
             </template>
             <div class="mt-4 text-right">
-                <button @click="importResult = null; importError = ''"
+                <button @click="importResult = null; transferError = ''"
                         class="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium">Close</button>
             </div>
         </div>
