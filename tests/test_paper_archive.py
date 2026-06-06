@@ -474,3 +474,38 @@ def test_build_archive_excludes_non_past_paper_batch(db_conn, regular_user, make
     zf = zipfile.ZipFile(io.BytesIO(blob))
     papers = json.loads(zf.read("manifest.json"))["papers"]
     assert [p["filename"] for p in papers] == ["Exam.PDF"]  # KO batch silently excluded
+
+
+def test_category_survives_export_import(db_conn, regular_user, second_user, make_subject):
+    user_id, _ = regular_user
+    uid2, _ = second_user
+    sid = make_subject("Biology")
+    cat = db_conn.execute(
+        "INSERT INTO categories (subject_id, name) VALUES (?, 'Cells')", (sid,)
+    ).lastrowid
+    db_conn.commit()
+    bid = _make_past_paper(db_conn, user_id, sid, filename="Bio-Cat.PDF", category_id=cat)
+    db_conn.execute(
+        """INSERT INTO questions
+           (batch_id, user_id, subject_id, category_id, page_number, question_text,
+            answer_text, approved, question_source)
+           VALUES (?, ?, ?, ?, 1, 'q', 'a', 1, 'past_paper')""",
+        (bid, user_id, sid, cat),
+    )
+    db_conn.commit()
+
+    blob, _name = paper_archive.build_archive([bid], user_id, db_conn)
+    parsed = paper_archive.read_archive(blob)
+
+    # Import as a DIFFERENT user so the duplicate guard doesn't trip.
+    result = paper_archive.import_paper(parsed["papers"][0], uid2, db_conn)
+    assert result["status"] == "imported"
+
+    new_bid = result["batch_id"]
+    row = db_conn.execute(
+        """SELECT c.name AS category_name
+             FROM upload_batches b JOIN categories c ON c.id = b.category_id
+            WHERE b.id = ?""",
+        (new_bid,),
+    ).fetchone()
+    assert row["category_name"] == "Cells"
