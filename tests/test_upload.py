@@ -755,3 +755,30 @@ def test_reblend_endpoint_rejects_non_ko_batch(
     resp = client.post(f"/api/upload/{b}/reblend",
                        headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 400
+
+
+def test_multi_status_accepts_multiple_ids(
+    client, db_conn, regular_user, make_subject, make_batch
+):
+    """Regression: the multi-processing page polls /multi-status for 2+ batches.
+
+    FastAPI's `ids: List[int] = Query(...)` only accepts repeated params
+    (`ids=1&ids=2`), not a comma-joined string (`ids=1,2` -> 422). Processing
+    more than one paper pair must return 200 with a row per batch.
+    """
+    uid, token = regular_user
+    headers = {"Authorization": f"Bearer {token}"}
+    sid = make_subject()
+    b1 = make_batch(uid, sid, filename="paper1.pdf")
+    b2 = make_batch(uid, sid, filename="paper2.pdf")
+
+    # Comma-joined (the old, broken form) is rejected by FastAPI.
+    bad = client.get(f"/api/upload/multi-status?ids={b1},{b2}", headers=headers)
+    assert bad.status_code == 422
+
+    # Repeated params (what the frontend now sends) succeed for multiple ids.
+    qs = "&".join(f"ids={i}" for i in (b1, b2))
+    resp = client.get(f"/api/upload/multi-status?{qs}", headers=headers)
+    assert resp.status_code == 200
+    returned = {row["id"] for row in resp.json()}
+    assert returned == {b1, b2}

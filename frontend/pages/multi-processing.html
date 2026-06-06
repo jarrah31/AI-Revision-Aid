@@ -21,7 +21,7 @@
 
     async poll() {
         try {
-            this.batches = await API.get('/upload/multi-status?ids=' + this.batchIds.join(','));
+            this.batches = await API.get('/upload/multi-status?' + this.batchIds.map(id => 'ids=' + id).join('&'));
             const done = this.batches.every(b => b.status === 'completed' || b.status === 'failed');
             if (done) {
                 clearInterval(this.polling);

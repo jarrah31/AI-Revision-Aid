@@ -1461,6 +1461,19 @@ def confirm_detection(
         except Exception:
             total_pages = 0
 
+        # Honour user-corrected metadata from the confirmation step, falling back
+        # to the auto-detected values when the user didn't override a field. This
+        # is what lets the user manually fix the year / paper / tier (e.g. when
+        # detection failed and they paired the QP and MS by hand).
+        exam_board = pair.exam_board if pair.exam_board is not None else qp_file["exam_board"]
+        exam_year = (
+            pair.exam_year
+            if pair.exam_year is not None
+            else (qp_file["exam_year"] or _year_from_filename(qp_file["filename"]))
+        )
+        paper_number = pair.paper_number if pair.paper_number is not None else qp_file["paper_number"]
+        tier = pair.tier if pair.tier is not None else qp_file["tier"]
+
         # Create batch record
         cursor = db.execute(
             """INSERT INTO upload_batches
@@ -1473,8 +1486,7 @@ def confirm_detection(
                 user["id"], req.subject_id, req.category_id, req.subcategory_id,
                 qp_file["filename"],
                 total_pages, total_pages,
-                qp_file["exam_board"], qp_file["exam_year"] or _year_from_filename(qp_file["filename"]),
-                qp_file["paper_number"], qp_file["tier"],
+                exam_board, exam_year, paper_number, tier,
             ),
         )
         db.commit()

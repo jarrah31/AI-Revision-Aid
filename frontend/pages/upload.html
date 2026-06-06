@@ -49,8 +49,8 @@
     get ppMatchedPairs() {
         return this.ppMatches.filter(m => m.match_group !== null);
     },
-    get ppUnmatchedFiles() {
-        return this.ppMatches.filter(m => m.match_group === null);
+    get ppUnmatchedQps() {
+        return this.ppMatches.filter(m => m.match_group === null && m.qp_id !== null);
     },
     get ppProcessablePairs() {
         return this.ppMatches.filter(m => m.qp_id !== null);
@@ -214,6 +214,32 @@
 
     ppFileById(id) {
         return this.ppDetections.find(f => f.id === id) || null;
+    },
+
+    // True if some QP match has manually claimed this mark scheme.
+    ppMsAssigned(msId) {
+        return this.ppMatches.some(m => m.qp_id !== null && m.ms_id === msId);
+    },
+    // Standalone (unmatched) mark schemes not yet attached to any QP.
+    get ppUnassignedMsMatches() {
+        return this.ppMatches.filter(m =>
+            m.match_group === null && m.qp_id === null && m.ms_id && !this.ppMsAssigned(m.ms_id)
+        );
+    },
+    // Mark-scheme file ids selectable for a given QP: the unassigned standalone
+    // mark schemes, plus whichever MS is currently attached to this QP (so it
+    // shows as selected — including an auto-matched MS that has no standalone row).
+    ppAvailableMsForQp(qpMatch) {
+        const ids = this.ppMatches
+            .filter(m => m.qp_id === null && m.ms_id &&
+                         (!this.ppMsAssigned(m.ms_id) || m.ms_id === qpMatch.ms_id))
+            .map(m => m.ms_id);
+        if (qpMatch.ms_id && !ids.includes(qpMatch.ms_id)) ids.unshift(qpMatch.ms_id);
+        return ids;
+    },
+    // Attach (or clear) a mark scheme on an unmatched QP match.
+    ppAssignMs(qpMatch, val) {
+        qpMatch.ms_id = val ? Number(val) : null;
     },
 
     async startDetection() {
@@ -791,39 +817,90 @@
                                           :title="(ppFileById(m.qp_id) || {}).filename"
                                           x-text="(ppFileById(m.qp_id) || {}).filename || 'Unknown'"></span>
                                 </div>
-                                <!-- MS row -->
-                                <div x-show="m.ms_id" class="px-3 py-2.5 flex items-center gap-2 text-sm border-t border-gray-100">
+                                <!-- Mark-scheme picker -->
+                                <div class="px-3 py-2.5 flex items-center gap-2 text-sm border-t border-gray-100">
                                     <span class="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold bg-green-100 text-green-700">MS</span>
-                                    <span class="text-gray-700 truncate text-xs"
-                                          :title="(ppFileById(m.ms_id) || {}).filename"
-                                          x-text="(ppFileById(m.ms_id) || {}).filename || 'Unknown'"></span>
-                                </div>
-                                <div x-show="!m.ms_id" class="px-3 py-2 text-xs text-amber-500 border-t border-gray-100">
-                                    No mark scheme matched — AI will infer answers
+                                    <select @change="ppAssignMs(m, $event.target.value)"
+                                            class="flex-1 min-w-0 px-2 py-1 border border-gray-200 rounded text-xs text-gray-700 bg-white focus:ring-1 focus:ring-indigo-400 outline-none">
+                                        <option value="" :selected="!m.ms_id">No mark scheme — AI will infer answers</option>
+                                        <template x-for="msId in ppAvailableMsForQp(m)" :key="msId">
+                                            <option :value="msId" :selected="msId === m.ms_id"
+                                                    x-text="(ppFileById(msId) || {}).filename || 'Mark scheme'"></option>
+                                        </template>
+                                    </select>
                                 </div>
                             </div>
                         </template>
                     </div>
                 </div>
 
-                <!-- Unmatched files -->
-                <div x-show="ppUnmatchedFiles.length > 0">
-                    <h4 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Unmatched Files</h4>
-                    <div class="rounded-lg border border-amber-200 bg-amber-50 divide-y divide-amber-100">
-                        <template x-for="(m, i) in ppMatches" :key="'u' + i">
-                            <div x-show="m.match_group === null" class="px-3 py-2.5 flex items-center gap-2 text-sm">
-                                <span x-show="m.qp_id && !m.ms_id"
-                                      class="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold bg-blue-100 text-blue-700">QP</span>
-                                <span x-show="m.ms_id && !m.qp_id"
-                                      class="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold bg-green-100 text-green-700">MS</span>
-                                <span class="text-gray-700 truncate text-xs flex-1"
-                                      x-text="(ppFileById(m.qp_id || m.ms_id) || {}).filename || 'Unknown'"></span>
-                                <span class="text-xs text-amber-600 shrink-0"
-                                      x-text="(m.ms_id && !m.qp_id) ? 'Will be skipped' : 'No pair found'"></span>
+                <!-- Unmatched question papers — editable, with manual mark-scheme pairing -->
+                <div x-show="ppUnmatchedQps.length > 0">
+                    <h4 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Unmatched Question Papers</h4>
+                    <p class="text-xs text-gray-400 mb-2">Detection couldn't pair these automatically. Set the year, paper and tier, and choose a mark scheme to match them by hand.</p>
+                    <div class="space-y-3">
+                        <template x-for="(m, i) in ppMatches" :key="'q' + i">
+                            <div x-show="m.match_group === null && m.qp_id !== null" class="rounded-lg border border-amber-200 overflow-hidden">
+                                <!-- Editable metadata row -->
+                                <div class="bg-amber-50 px-3 py-2 flex flex-wrap gap-2 items-center border-b border-amber-200">
+                                    <select x-model="ppMatches[i].exam_board"
+                                            class="px-2 py-1 border border-gray-200 rounded text-xs text-gray-700 bg-white focus:ring-1 focus:ring-indigo-400 outline-none">
+                                        <option value="">Board?</option>
+                                        <template x-for="b in ['AQA','Edexcel','OCR','WJEC','CCEA','Cambridge','Other']" :key="b">
+                                            <option :value="b" :selected="ppMatches[i].exam_board === b" x-text="b"></option>
+                                        </template>
+                                    </select>
+                                    <input x-model.number="ppMatches[i].exam_year" type="number" placeholder="Year"
+                                           min="2000" max="2099"
+                                           class="w-20 px-2 py-1 border border-gray-200 rounded text-xs text-gray-700 focus:ring-1 focus:ring-indigo-400 outline-none">
+                                    <input x-model="ppMatches[i].paper_number" type="text" placeholder="Paper No."
+                                           class="w-24 px-2 py-1 border border-gray-200 rounded text-xs text-gray-700 focus:ring-1 focus:ring-indigo-400 outline-none">
+                                    <select x-model="ppMatches[i].tier"
+                                            class="px-2 py-1 border border-gray-200 rounded text-xs text-gray-700 bg-white focus:ring-1 focus:ring-indigo-400 outline-none">
+                                        <option value="">All Tiers</option>
+                                        <option value="Foundation">Foundation</option>
+                                        <option value="Higher">Higher</option>
+                                    </select>
+                                </div>
+                                <!-- QP row -->
+                                <div class="px-3 py-2.5 flex items-center gap-2 text-sm">
+                                    <span class="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold bg-blue-100 text-blue-700">QP</span>
+                                    <span class="text-gray-700 truncate text-xs"
+                                          :title="(ppFileById(m.qp_id) || {}).filename"
+                                          x-text="(ppFileById(m.qp_id) || {}).filename || 'Unknown'"></span>
+                                </div>
+                                <!-- Manual mark-scheme picker -->
+                                <div class="px-3 py-2.5 flex items-center gap-2 text-sm border-t border-gray-100">
+                                    <span class="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold bg-green-100 text-green-700">MS</span>
+                                    <select @change="ppAssignMs(m, $event.target.value)"
+                                            class="flex-1 min-w-0 px-2 py-1 border border-gray-200 rounded text-xs text-gray-700 bg-white focus:ring-1 focus:ring-indigo-400 outline-none">
+                                        <option value="" :selected="!m.ms_id">No mark scheme — AI will infer answers</option>
+                                        <template x-for="msId in ppAvailableMsForQp(m)" :key="msId">
+                                            <option :value="msId" :selected="msId === m.ms_id"
+                                                    x-text="(ppFileById(msId) || {}).filename || 'Mark scheme'"></option>
+                                        </template>
+                                    </select>
+                                </div>
                             </div>
                         </template>
                     </div>
-                    <p class="text-xs text-gray-400 mt-1">Unmatched mark schemes won't be processed. Unmatched question papers will be processed without answers.</p>
+                </div>
+
+                <!-- Unassigned mark schemes (no QP to pair with) -->
+                <div x-show="ppUnassignedMsMatches.length > 0">
+                    <h4 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Unmatched Mark Schemes</h4>
+                    <div class="rounded-lg border border-amber-200 bg-amber-50 divide-y divide-amber-100">
+                        <template x-for="(m, i) in ppMatches" :key="'ms' + i">
+                            <div x-show="m.match_group === null && m.qp_id === null && m.ms_id && !ppMsAssigned(m.ms_id)"
+                                 class="px-3 py-2.5 flex items-center gap-2 text-sm">
+                                <span class="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold bg-green-100 text-green-700">MS</span>
+                                <span class="text-gray-700 truncate text-xs flex-1"
+                                      x-text="(ppFileById(m.ms_id) || {}).filename || 'Unknown'"></span>
+                                <span class="text-xs text-amber-600 shrink-0">Will be skipped</span>
+                            </div>
+                        </template>
+                    </div>
+                    <p class="text-xs text-gray-400 mt-1">Pair a mark scheme to a question paper above to include it, otherwise it won't be processed.</p>
                 </div>
 
                 <!-- Process button -->
