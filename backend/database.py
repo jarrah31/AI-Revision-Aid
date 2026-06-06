@@ -362,4 +362,35 @@ def init_db():
         except Exception:
             pass  # Column already exists
 
+    backfill_past_paper_categories(db)
+    db.commit()
+
     db.close()
+
+
+def backfill_past_paper_categories(db):
+    """One-time data migration: for past-paper batches with no batch-level
+    category, set it to the most common non-NULL category among the batch's
+    own questions. Idempotent — only touches batches where category_id IS NULL.
+    Batches whose questions are all untagged stay NULL."""
+    db.execute(
+        """
+        UPDATE upload_batches
+           SET category_id = (
+               SELECT q.category_id
+                 FROM questions q
+                WHERE q.batch_id = upload_batches.id
+                  AND q.category_id IS NOT NULL
+                GROUP BY q.category_id
+                ORDER BY COUNT(*) DESC, q.category_id ASC
+                LIMIT 1
+           )
+         WHERE batch_type = 'past_paper'
+           AND category_id IS NULL
+           AND EXISTS (
+               SELECT 1 FROM questions q2
+                WHERE q2.batch_id = upload_batches.id
+                  AND q2.category_id IS NOT NULL
+           )
+        """
+    )
