@@ -42,6 +42,47 @@ Alpine.data('pastPapersPage', () => ({
         return [p.exam_board, p.exam_year, p.paper_number, p.tier].filter(Boolean).join(' ') || p.filename;
     },
 
+    // ── Colour-coded metadata pills ──────────────────────────────────────────
+    // Inline styles (hex) so they render without any Tailwind JIT build step.
+
+    // Paper number → shades of one blue, stepped by the paper digit (1, 2, 3…).
+    paperPillStyle(p) {
+        const m = (p.paper_number || '').match(/(\d+)/);
+        if (!m) return 'background:#e5e7eb;color:#374151';   // unknown → grey
+        const shades = [
+            'background:#dbeafe;color:#1e40af',   // Paper 1 — blue-100 / blue-800
+            'background:#bfdbfe;color:#1e3a8a',   // Paper 2 — blue-200 / blue-900
+            'background:#93c5fd;color:#1e3a8a',   // Paper 3 — blue-300
+            'background:#60a5fa;color:#172554',   // Paper 4 — blue-400
+        ];
+        return shades[(parseInt(m[1], 10) - 1) % shades.length];
+    },
+
+    // Tier → shades of one violet (Foundation lighter, Higher darker).
+    tierPillStyle(p) {
+        const t = (p.tier || '').toLowerCase();
+        if (t.startsWith('f')) return 'background:#ede9fe;color:#5b21b6';   // Foundation — violet-100 / violet-800
+        if (t.startsWith('h')) return 'background:#c4b5fd;color:#4c1d95';   // Higher — violet-300 / violet-900
+        return 'background:#e5e7eb;color:#374151';
+    },
+
+    // Year → a stable distinct hue per year (same year always same colour).
+    yearPillStyle(p) {
+        if (!p.exam_year) return 'background:#e5e7eb;color:#374151';
+        const palette = [
+            'background:#fee2e2;color:#991b1b',   // red
+            'background:#ffedd5;color:#9a3412',   // orange
+            'background:#fef9c3;color:#854d0e',   // amber
+            'background:#dcfce7;color:#166534',   // green
+            'background:#ccfbf1;color:#115e59',   // teal
+            'background:#cffafe;color:#155e75',   // cyan
+            'background:#fce7f3;color:#9d174e',   // pink
+            'background:#f3e8ff;color:#6b21a8',   // purple
+        ];
+        const y = parseInt(p.exam_year, 10) || 0;
+        return palette[((y % palette.length) + palette.length) % palette.length];
+    },
+
     async toggle(batchId) {
         this.expanded[batchId] = !this.expanded[batchId];
         if (this.expanded[batchId] && !this.questions[batchId]) {
@@ -291,7 +332,13 @@ Alpine.data('pastPapersPage', () => ({
                 </div>
             </div>
 
-            <div x-show="editingPaper !== p.id" class="px-3 pb-2 flex items-center gap-1.5">
+            <div x-show="editingPaper !== p.id" class="px-3 pb-2 flex flex-wrap items-center gap-1.5">
+                <span x-show="p.paper_number" class="text-xs font-medium px-2 py-0.5 rounded-full"
+                      :style="paperPillStyle(p)" x-text="p.paper_number"></span>
+                <span x-show="p.tier" class="text-xs font-medium px-2 py-0.5 rounded-full"
+                      :style="tierPillStyle(p)" x-text="p.tier"></span>
+                <span x-show="p.exam_year" class="text-xs font-medium px-2 py-0.5 rounded-full"
+                      :style="yearPillStyle(p)" x-text="p.exam_year"></span>
                 <span class="text-xs px-2 py-0.5 rounded-full"
                       :class="p.category_name ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-500'"
                       x-text="p.category_name ? ('Category: ' + p.category_name) : 'Uncategorised'"></span>
