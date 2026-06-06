@@ -10,8 +10,8 @@ Alpine.data('pastPapersPage', () => ({
     editing: null,
     editForm: {},
     editingPaper: null,      // paper id whose classification is being edited
-    paperForm: { subject_id: null, categoryText: '' },
-    catNames: [],            // category names for the chosen subject (datalist)
+    paperForm: { subject_id: null, category_id: '', newCategoryText: '' },
+    editCategories: [],      // {id,name} categories for the chosen subject
     _redetectingId: null,   // id of the paper currently being re-detected (null = none)
     selectedPapers: [],
     importing: false,
@@ -80,23 +80,28 @@ Alpine.data('pastPapersPage', () => ({
         this.editingPaper = p.id;
         this.paperForm = {
             subject_id: p.subject_id || this.subjectId,
-            categoryText: p.category_name || '',
+            category_id: p.category_id || '',   // '' = Uncategorised
+            newCategoryText: '',
         };
-        await this.loadCatNames(this.paperForm.subject_id);
+        await this.loadEditCategories(this.paperForm.subject_id);
     },
-    async loadCatNames(subjectId) {
-        const cats = await API.get(`/categories?subject_id=${subjectId}`);
-        this.catNames = cats.map(c => c.name);
+    async loadEditCategories(subjectId) {
+        this.editCategories = await API.get(`/categories?subject_id=${subjectId}`);
     },
     onPaperSubjectChange() {
-        // Switching subject invalidates the typed category.
-        this.paperForm.categoryText = '';
-        this.loadCatNames(this.paperForm.subject_id);
+        // Switching subject invalidates the chosen/typed category.
+        this.paperForm.category_id = '';
+        this.paperForm.newCategoryText = '';
+        this.loadEditCategories(this.paperForm.subject_id);
     },
     async savePaperEdit(p) {
-        const name = (this.paperForm.categoryText || '').trim();
         const body = { subject_id: Number(this.paperForm.subject_id) };
-        if (name) body.new_category_name = name;   // backend get-or-creates by name
+        const newName = (this.paperForm.newCategoryText || '').trim();
+        if (newName) {
+            body.new_category_name = newName;            // create (or match) by name
+        } else {
+            body.category_id = Number(this.paperForm.category_id) || null;  // existing pick / Uncategorised
+        }
         await API.patch(`/past-papers/${p.id}`, body);
         this.editingPaper = null;
         await this.loadSubject();
@@ -304,8 +309,19 @@ Alpine.data('pastPapersPage', () => ({
                     </select>
                 </label>
                 <label class="text-sm">
-                    <span class="block text-xs text-gray-500 mb-1">Category (pick or type new)</span>
-                    <input x-model="paperForm.categoryText" list="catnames-list"
+                    <span class="block text-xs text-gray-500 mb-1">Category</span>
+                    <select x-model="paperForm.category_id"
+                            :disabled="!!(paperForm.newCategoryText || '').trim()"
+                            class="border rounded px-2 py-1 text-sm disabled:opacity-50">
+                        <option value="">— Uncategorised —</option>
+                        <template x-for="c in editCategories" :key="c.id">
+                            <option :value="c.id" :selected="c.id === paperForm.category_id" x-text="c.name"></option>
+                        </template>
+                    </select>
+                </label>
+                <label class="text-sm">
+                    <span class="block text-xs text-gray-500 mb-1">…or new category</span>
+                    <input x-model="paperForm.newCategoryText"
                            placeholder="e.g. Cells" class="border rounded px-2 py-1 text-sm">
                 </label>
                 <div class="flex gap-2">
@@ -367,12 +383,6 @@ Alpine.data('pastPapersPage', () => ({
             </div>
         </div>
     </template>
-
-    <datalist id="catnames-list">
-        <template x-for="n in catNames" :key="n">
-            <option :value="n"></option>
-        </template>
-    </datalist>
 
     <!-- Export / import result modal -->
     <div x-show="importResult || transferError" style="display:none"
