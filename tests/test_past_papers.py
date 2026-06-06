@@ -168,146 +168,173 @@ def _make_category(db_conn, subject_id, name="Cells"):
     return cur.lastrowid
 
 
-def _make_subcategory(db_conn, category_id, name="Mitosis"):
-    cur = db_conn.execute(
-        "INSERT INTO subcategories (category_id, name) VALUES (?, ?)", (category_id, name)
-    )
+def _paper_with_questions(db_conn, uid, subject_id, category_id=None, n=2):
+    bid = db_conn.execute(
+        """INSERT INTO upload_batches
+           (user_id, subject_id, category_id, filename, pdf_path, page_start,
+            page_end, status, batch_type)
+           VALUES (?, ?, ?, 'p.pdf', 'batch_1.pdf', 1, 2, 'completed', 'past_paper')""",
+        (uid, subject_id, category_id),
+    ).lastrowid
+    qids = []
+    for i in range(n):
+        qids.append(db_conn.execute(
+            """INSERT INTO questions
+               (batch_id, user_id, subject_id, page_number, question_text,
+                answer_text, approved, question_source)
+               VALUES (?, ?, ?, 1, 'q', 'a', 1, 'past_paper')""",
+            (bid, uid, subject_id),
+        ).lastrowid)
     db_conn.commit()
-    return cur.lastrowid
+    return bid, qids
 
 
-def test_tag_questions_bulk(
-    client, db_conn, regular_user, user_headers, make_subject, make_batch, make_question
-):
-    user_id, _ = regular_user
-    subject_id = make_subject()
-    batch_id = make_batch(user_id, subject_id)
-    q1 = make_question(batch_id, user_id, subject_id)
-    q2 = make_question(batch_id, user_id, subject_id)
-    cat = _make_category(db_conn, subject_id)
+def test_patch_assigns_existing_category_and_cascades(client, db_conn, make_subject):
+    uid, token = _insert_user(db_conn, "patch1")
+    subject_id = make_subject(name="Biology")
+    cat = _make_category(db_conn, subject_id, name="Cells")
+    bid, qids = _paper_with_questions(db_conn, uid, subject_id)
 
-    r = client.post(
-        "/api/past-papers/tag",
-        headers=user_headers,
-        json={"question_ids": [q1, q2], "category_id": cat, "subcategory_id": None},
+    resp = client.patch(
+        f"/api/past-papers/{bid}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"subject_id": subject_id, "category_id": cat},
     )
-    assert r.status_code == 200
-    for q in (q1, q2):
-        row = db_conn.execute(
-            "SELECT category_id FROM questions WHERE id=?", (q,)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["category_id"] == cat
+    assert body["category_name"] == "Cells"
+    b = db_conn.execute("SELECT category_id FROM upload_batches WHERE id=?", (bid,)).fetchone()
+    assert b["category_id"] == cat
+    for qid in qids:
+        q = db_conn.execute(
+            "SELECT subject_id, category_id, subcategory_id FROM questions WHERE id=?", (qid,)
         ).fetchone()
-        assert row["category_id"] == cat
+        assert q["subject_id"] == subject_id
+        assert q["category_id"] == cat
+        assert q["subcategory_id"] is None
 
 
-def test_tag_clears_with_null(
-    client, db_conn, regular_user, user_headers, make_subject, make_batch, make_question
-):
-    user_id, _ = regular_user
-    subject_id = make_subject()
-    batch_id = make_batch(user_id, subject_id)
-    q = make_question(batch_id, user_id, subject_id)
-    cat = _make_category(db_conn, subject_id)
-    db_conn.execute("UPDATE questions SET category_id=? WHERE id=?", (cat, q))
+def test_patch_creates_new_category_by_name(client, db_conn, make_subject):
+    uid, token = _insert_user(db_conn, "patch2")
+    subject_id = make_subject(name="Biology")
+    bid, qids = _paper_with_questions(db_conn, uid, subject_id)
+
+    resp = client.patch(
+        f"/api/past-papers/{bid}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"subject_id": subject_id, "new_category_name": "  Genetics  "},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["category_name"] == "Genetics"
+    new_cat = db_conn.execute(
+        "SELECT id FROM categories WHERE subject_id=? AND name='Genetics'", (subject_id,)
+    ).fetchone()
+    assert new_cat is not None
+    assert body["category_id"] == new_cat["id"]
+
+
+def test_patch_reassigns_subject_and_cascades(client, db_conn, make_subject):
+    uid, token = _insert_user(db_conn, "patch3")
+    subj_a = make_subject(name="Biology")
+    subj_b = make_subject(name="Chemistry")
+    bid, qids = _paper_with_questions(db_conn, uid, subj_a)
+
+    resp = client.patch(
+        f"/api/past-papers/{bid}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"subject_id": subj_b, "new_category_name": "Bonding"},
+    )
+    assert resp.status_code == 200
+    b = db_conn.execute("SELECT subject_id FROM upload_batches WHERE id=?", (bid,)).fetchone()
+    assert b["subject_id"] == subj_b
+    cat = db_conn.execute(
+        "SELECT subject_id FROM categories WHERE id=?", (resp.json()["category_id"],)
+    ).fetchone()
+    assert cat["subject_id"] == subj_b
+    for qid in qids:
+        q = db_conn.execute("SELECT subject_id FROM questions WHERE id=?", (qid,)).fetchone()
+        assert q["subject_id"] == subj_b
+
+
+def test_patch_clears_category_when_none_given(client, db_conn, make_subject):
+    uid, token = _insert_user(db_conn, "patch4")
+    subject_id = make_subject(name="Biology")
+    cat = _make_category(db_conn, subject_id, name="Cells")
+    bid, qids = _paper_with_questions(db_conn, uid, subject_id, category_id=cat)
+
+    resp = client.patch(
+        f"/api/past-papers/{bid}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"subject_id": subject_id},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["category_id"] is None
+    q = db_conn.execute("SELECT category_id FROM questions WHERE id=?", (qids[0],)).fetchone()
+    assert q["category_id"] is None
+
+
+def test_patch_rejects_category_from_other_subject(client, db_conn, make_subject):
+    uid, token = _insert_user(db_conn, "patch5")
+    subj_a = make_subject(name="Biology")
+    subj_b = make_subject(name="Chemistry")
+    foreign_cat = _make_category(db_conn, subj_b, name="Bonding")
+    bid, _ = _paper_with_questions(db_conn, uid, subj_a)
+
+    resp = client.patch(
+        f"/api/past-papers/{bid}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"subject_id": subj_a, "category_id": foreign_cat},
+    )
+    assert resp.status_code == 400
+
+
+def test_patch_404_for_other_users_paper(client, db_conn, make_subject):
+    owner, _ = _insert_user(db_conn, "patchowner")
+    _, other_token = _insert_user(db_conn, "patchother")
+    subject_id = make_subject(name="Biology")
+    bid, _ = _paper_with_questions(db_conn, owner, subject_id)
+
+    resp = client.patch(
+        f"/api/past-papers/{bid}",
+        headers={"Authorization": f"Bearer {other_token}"},
+        json={"subject_id": subject_id},
+    )
+    assert resp.status_code == 404
+
+
+def test_patch_404_for_ko_batch(client, db_conn, make_subject):
+    uid, token = _insert_user(db_conn, "patchko")
+    subject_id = make_subject(name="Biology")
+    bid = db_conn.execute(
+        """INSERT INTO upload_batches
+           (user_id, subject_id, filename, pdf_path, page_start, page_end,
+            status, batch_type)
+           VALUES (?, ?, 'ko.pdf', 'batch_1.pdf', 1, 2, 'completed', 'knowledge_organiser')""",
+        (uid, subject_id),
+    ).lastrowid
     db_conn.commit()
 
-    r = client.post(
-        "/api/past-papers/tag",
-        headers=user_headers,
-        json={"question_ids": [q], "category_id": None, "subcategory_id": None},
+    resp = client.patch(
+        f"/api/past-papers/{bid}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"subject_id": subject_id},
     )
-    assert r.status_code == 200
-    row = db_conn.execute("SELECT category_id FROM questions WHERE id=?", (q,)).fetchone()
-    assert row["category_id"] is None
+    assert resp.status_code == 404
 
 
-def test_tag_rejects_cross_subject_category(
-    client, db_conn, regular_user, user_headers, make_subject, make_batch, make_question
-):
-    user_id, _ = regular_user
-    subject_a = make_subject("Biology")
-    subject_b = make_subject("Chemistry")
-    batch_id = make_batch(user_id, subject_a)
-    q = make_question(batch_id, user_id, subject_a)
-    foreign_cat = _make_category(db_conn, subject_b)  # belongs to a different subject
+def test_patch_400_for_missing_subject(client, db_conn, make_subject):
+    uid, token = _insert_user(db_conn, "patchnosubj")
+    subject_id = make_subject(name="Biology")
+    bid, _ = _paper_with_questions(db_conn, uid, subject_id)
 
-    r = client.post(
-        "/api/past-papers/tag",
-        headers=user_headers,
-        json={"question_ids": [q], "category_id": foreign_cat, "subcategory_id": None},
+    resp = client.patch(
+        f"/api/past-papers/{bid}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"subject_id": 999999},  # no such subject
     )
-    assert r.status_code == 400
-    row = db_conn.execute("SELECT category_id FROM questions WHERE id=?", (q,)).fetchone()
-    assert row["category_id"] is None
-
-
-def test_tag_rejects_subcategory_not_under_category(
-    client, db_conn, regular_user, user_headers, make_subject, make_batch, make_question
-):
-    user_id, _ = regular_user
-    subject_id = make_subject()
-    batch_id = make_batch(user_id, subject_id)
-    q = make_question(batch_id, user_id, subject_id)
-    cat = _make_category(db_conn, subject_id)
-    other_cat = _make_category(db_conn, subject_id, name="Other")
-    foreign_sub = _make_subcategory(db_conn, other_cat)  # belongs to a different category
-
-    r = client.post(
-        "/api/past-papers/tag",
-        headers=user_headers,
-        json={"question_ids": [q], "category_id": cat, "subcategory_id": foreign_sub},
-    )
-    assert r.status_code == 400
-    row = db_conn.execute(
-        "SELECT category_id, subcategory_id FROM questions WHERE id=?", (q,)
-    ).fetchone()
-    assert row["category_id"] is None
-    assert row["subcategory_id"] is None
-
-
-def test_tag_with_valid_subcategory(
-    client, db_conn, regular_user, user_headers, make_subject, make_batch, make_question
-):
-    user_id, _ = regular_user
-    subject_id = make_subject()
-    batch_id = make_batch(user_id, subject_id)
-    q = make_question(batch_id, user_id, subject_id)
-    cat = _make_category(db_conn, subject_id)
-    sub = _make_subcategory(db_conn, cat)
-
-    r = client.post(
-        "/api/past-papers/tag",
-        headers=user_headers,
-        json={"question_ids": [q], "category_id": cat, "subcategory_id": sub},
-    )
-    assert r.status_code == 200
-    row = db_conn.execute(
-        "SELECT category_id, subcategory_id FROM questions WHERE id=?", (q,)
-    ).fetchone()
-    assert row["category_id"] == cat
-    assert row["subcategory_id"] == sub
-
-
-def test_tag_ignores_questions_not_owned(
-    client, db_conn, regular_user, second_user, user_headers,
-    make_subject, make_batch, make_question
-):
-    owner_id, _ = regular_user
-    other_id, _ = second_user
-    subject_id = make_subject()
-    batch_id = make_batch(other_id, subject_id)
-    foreign_q = make_question(batch_id, other_id, subject_id)  # owned by second_user
-    cat = _make_category(db_conn, subject_id)
-
-    r = client.post(
-        "/api/past-papers/tag",
-        headers=user_headers,
-        json={"question_ids": [foreign_q], "category_id": cat, "subcategory_id": None},
-    )
-    assert r.status_code == 200  # no error, but nothing changes
-    row = db_conn.execute(
-        "SELECT category_id FROM questions WHERE id=?", (foreign_q,)
-    ).fetchone()
-    assert row["category_id"] is None
+    assert resp.status_code == 400
 
 
 def test_recrop_creates_new_image_and_links(

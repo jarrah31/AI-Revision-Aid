@@ -124,57 +124,84 @@ def delete_past_paper(
     return {"message": "Past paper deleted"}
 
 
-class TagRequest(BaseModel):
-    question_ids: list[int]
+class ReclassifyRequest(BaseModel):
+    subject_id: int
     category_id: int | None = None
-    subcategory_id: int | None = None
+    new_category_name: str | None = None
 
 
-@router.post("/tag")
-def tag_questions(
-    req: TagRequest,
+@router.patch("/{batch_id}")
+def reclassify_past_paper(
+    batch_id: int,
+    req: ReclassifyRequest,
     user: dict = Depends(get_current_user),
     db: sqlite3.Connection = Depends(get_db),
 ):
-    """Set (or clear) category/subcategory on the user's questions. Per-question or bulk."""
-    if not req.question_ids:
-        return {"message": "No questions to tag", "updated": 0}
+    """Set a past paper's subject + category at the paper level and cascade the
+    classification down to all of its questions (clearing subcategory). Either
+    pick an existing category_id under the subject, or create one by name via
+    new_category_name (which takes precedence)."""
+    batch = db.execute(
+        "SELECT id FROM upload_batches WHERE id = ? AND user_id = ? AND batch_type = 'past_paper'",
+        (batch_id, user["id"]),
+    ).fetchone()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Past paper not found")
 
-    placeholders = ",".join("?" for _ in req.question_ids)
-    owned = db.execute(
-        f"""SELECT id, subject_id FROM questions
-            WHERE id IN ({placeholders}) AND user_id = ?""",
-        (*req.question_ids, user["id"]),
-    ).fetchall()
-    if not owned:
-        return {"message": "No matching questions", "updated": 0}
+    subject = db.execute(
+        "SELECT id FROM subjects WHERE id = ?", (req.subject_id,)
+    ).fetchone()
+    if not subject:
+        raise HTTPException(status_code=400, detail="Subject not found")
 
-    if req.category_id is not None:
-        subject_ids = {row["subject_id"] for row in owned}
+    # Resolve category: new_category_name (get-or-create) wins over category_id.
+    category_id = None
+    name = (req.new_category_name or "").strip()
+    if name:
+        existing = db.execute(
+            "SELECT id FROM categories WHERE subject_id = ? AND name = ?",
+            (req.subject_id, name),
+        ).fetchone()
+        if existing:
+            category_id = existing["id"]
+        else:
+            cur = db.execute(
+                "INSERT INTO categories (subject_id, name) VALUES (?, ?)",
+                (req.subject_id, name),
+            )
+            category_id = cur.lastrowid
+    elif req.category_id is not None:
         cat = db.execute(
             "SELECT subject_id FROM categories WHERE id = ?", (req.category_id,)
         ).fetchone()
-        if not cat or cat["subject_id"] not in subject_ids:
+        if not cat or cat["subject_id"] != req.subject_id:
             raise HTTPException(
-                status_code=400, detail="Category does not belong to the question's subject"
+                status_code=400, detail="Category does not belong to the chosen subject"
             )
-    if req.subcategory_id is not None:
-        sub = db.execute(
-            "SELECT category_id FROM subcategories WHERE id = ?", (req.subcategory_id,)
-        ).fetchone()
-        if not sub or sub["category_id"] != req.category_id:
-            raise HTTPException(
-                status_code=400, detail="Subcategory does not belong to the category"
-            )
+        category_id = req.category_id
 
-    owned_ids = [row["id"] for row in owned]
-    ph = ",".join("?" for _ in owned_ids)
     db.execute(
-        f"UPDATE questions SET category_id = ?, subcategory_id = ? WHERE id IN ({ph})",
-        (req.category_id, req.subcategory_id, *owned_ids),
+        "UPDATE upload_batches SET subject_id = ?, category_id = ?, subcategory_id = NULL WHERE id = ?",
+        (req.subject_id, category_id, batch_id),
+    )
+    db.execute(
+        "UPDATE questions SET subject_id = ?, category_id = ?, subcategory_id = NULL WHERE batch_id = ?",
+        (req.subject_id, category_id, batch_id),
     )
     db.commit()
-    return {"message": "Tagged", "updated": len(owned_ids)}
+
+    category_name = None
+    if category_id is not None:
+        row = db.execute(
+            "SELECT name FROM categories WHERE id = ?", (category_id,)
+        ).fetchone()
+        category_name = row["name"] if row else None
+
+    return {
+        "subject_id": req.subject_id,
+        "category_id": category_id,
+        "category_name": category_name,
+    }
 
 
 class RecropRequest(BaseModel):
