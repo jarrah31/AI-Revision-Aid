@@ -6,6 +6,8 @@
 # ── User Data ─────────────────────────────────────────────────────────────────
 # SQLite database (contains user accounts, questions, quiz history)
 data/revisionaid.db
+# WAL/SHM sidecar files created in WAL journal mode
+data/*.db-*
 
 # Uploaded PDFs and extracted images
 data/pdfs/*
