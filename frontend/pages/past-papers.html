@@ -7,13 +7,11 @@ Alpine.data('pastPapersPage', () => ({
     loading: false,
     expanded: {},
     questions: {},
-    categories: [],
-    subcategories: {},
-    selected: {},
-    bulkCategoryId: '',
-    bulkSubcategoryId: '',
     editing: null,
     editForm: {},
+    editingPaper: null,      // paper id whose classification is being edited
+    paperForm: { subject_id: null, categoryText: '' },
+    catNames: [],            // category names for the chosen subject (datalist)
     _redetectingId: null,   // id of the paper currently being re-detected (null = none)
     selectedPapers: [],
     importing: false,
@@ -30,15 +28,13 @@ Alpine.data('pastPapersPage', () => ({
             if (papers.length) { this.subjectId = s.id; this.papers = papers; break; }
         }
         if (!this.subjectId) this.subjectId = this.subjects[0].id;
-        this.categories = await API.get(`/categories?subject_id=${this.subjectId}`);
         this.loading = false;
     },
 
     async loadSubject() {
         this.loading = true;
-        this.expanded = {}; this.questions = {}; this.selected = {}; this.selectedPapers = [];
+        this.expanded = {}; this.questions = {}; this.selectedPapers = [];
         this.papers = await API.get(`/past-papers?subject_id=${this.subjectId}`);
-        this.categories = await API.get(`/categories?subject_id=${this.subjectId}`);
         this.loading = false;
     },
 
@@ -80,48 +76,30 @@ Alpine.data('pastPapersPage', () => ({
         this.editing = null;
     },
 
-    async loadSubcats(categoryId) {
-        if (categoryId && !this.subcategories[categoryId]) {
-            this.subcategories[categoryId] = await API.get(`/subcategories?category_id=${categoryId}`);
-        }
+    async startPaperEdit(p) {
+        this.editingPaper = p.id;
+        this.paperForm = {
+            subject_id: p.subject_id || this.subjectId,
+            categoryText: p.category_name || '',
+        };
+        await this.loadCatNames(this.paperForm.subject_id);
     },
-
-    async tagOne(q, categoryId, subcategoryId) {
-        const catId = Number(categoryId) || null;
-        const subId = Number(subcategoryId) || null;
-        await API.post('/past-papers/tag', {
-            question_ids: [q.id],
-            category_id: catId,
-            subcategory_id: subId,
-        });
-        q.category_id = catId;
-        q.subcategory_id = subId;
+    async loadCatNames(subjectId) {
+        const cats = await API.get(`/categories?subject_id=${subjectId}`);
+        this.catNames = cats.map(c => c.name);
     },
-
-    selectedIds(batchId) {
-        return (this.questions[batchId] || []).filter(q => this.selected[q.id]).map(q => q.id);
+    onPaperSubjectChange() {
+        // Switching subject invalidates the typed category.
+        this.paperForm.categoryText = '';
+        this.loadCatNames(this.paperForm.subject_id);
     },
-    toggleAll(batchId) {
-        const qs = this.questions[batchId] || [];
-        const allSel = qs.every(q => this.selected[q.id]);
-        qs.forEach(q => this.selected[q.id] = !allSel);
-    },
-    async applyBulkTag(batchId) {
-        const ids = this.selectedIds(batchId);
-        if (!ids.length) return;
-        const catId = Number(this.bulkCategoryId) || null;
-        const subId = Number(this.bulkSubcategoryId) || null;
-        await API.post('/past-papers/tag', {
-            question_ids: ids,
-            category_id: catId,
-            subcategory_id: subId,
-        });
-        const qs = this.questions[batchId];
-        qs.forEach(q => { if (this.selected[q.id]) {
-            q.category_id = catId;
-            q.subcategory_id = subId;
-        }});
-        ids.forEach(id => this.selected[id] = false);
+    async savePaperEdit(p) {
+        const name = (this.paperForm.categoryText || '').trim();
+        const body = { subject_id: Number(this.paperForm.subject_id) };
+        if (name) body.new_category_name = name;   // backend get-or-creates by name
+        await API.patch(`/past-papers/${p.id}`, body);
+        this.editingPaper = null;
+        await this.loadSubject();
     },
 
     // Re-crop modal
@@ -308,34 +286,40 @@ Alpine.data('pastPapersPage', () => ({
                 </div>
             </div>
 
-            <div x-show="expanded[p.id]" class="border-t p-3 space-y-3">
-                <div class="flex flex-wrap items-center gap-2 bg-gray-50 p-2 rounded"
-                     x-show="selectedIds(p.id).length">
-                    <span class="text-sm" x-text="`${selectedIds(p.id).length} selected`"></span>
-                    <select x-model="bulkCategoryId" @change="loadSubcats(bulkCategoryId)"
+            <div x-show="editingPaper !== p.id" class="px-3 pb-2 flex items-center gap-1.5">
+                <span class="text-xs px-2 py-0.5 rounded-full"
+                      :class="p.category_name ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-500'"
+                      x-text="p.category_name ? ('Category: ' + p.category_name) : 'Uncategorised'"></span>
+                <button @click="startPaperEdit(p)" class="text-xs text-indigo-600 hover:underline">Edit</button>
+            </div>
+
+            <div x-show="editingPaper === p.id" class="border-t p-3 bg-gray-50 flex flex-wrap items-end gap-3">
+                <label class="text-sm">
+                    <span class="block text-xs text-gray-500 mb-1">Subject</span>
+                    <select x-model="paperForm.subject_id" @change="onPaperSubjectChange()"
                             class="border rounded px-2 py-1 text-sm">
-                        <option value="">— category —</option>
-                        <template x-for="c in categories" :key="c.id">
-                            <option :value="c.id" x-text="c.name"></option>
+                        <template x-for="s in subjects" :key="s.id">
+                            <option :value="s.id" :selected="s.id === paperForm.subject_id" x-text="s.name"></option>
                         </template>
                     </select>
-                    <select x-model="bulkSubcategoryId" class="border rounded px-2 py-1 text-sm"
-                            x-show="bulkCategoryId">
-                        <option value="">— subcategory —</option>
-                        <template x-for="sc in (subcategories[bulkCategoryId] || [])" :key="sc.id">
-                            <option :value="sc.id" x-text="sc.name"></option>
-                        </template>
-                    </select>
-                    <button @click="applyBulkTag(p.id)"
-                            class="bg-indigo-600 text-white px-3 py-1 rounded text-sm">Apply tag</button>
+                </label>
+                <label class="text-sm">
+                    <span class="block text-xs text-gray-500 mb-1">Category (pick or type new)</span>
+                    <input x-model="paperForm.categoryText" list="catnames-list"
+                           placeholder="e.g. Cells" class="border rounded px-2 py-1 text-sm">
+                </label>
+                <div class="flex gap-2">
+                    <button @click="savePaperEdit(p)"
+                            class="bg-green-600 text-white px-3 py-1 rounded text-sm">Save</button>
+                    <button @click="editingPaper = null"
+                            class="px-3 py-1 rounded text-sm border">Cancel</button>
                 </div>
+            </div>
 
-                <button @click="toggleAll(p.id)" class="text-sm text-indigo-600">Select all</button>
-
+            <div x-show="expanded[p.id]" class="border-t p-3 space-y-3">
                 <template x-for="q in (questions[p.id] || [])" :key="q.id">
                     <div class="border rounded p-2">
                         <div class="flex items-start gap-2">
-                            <input type="checkbox" x-model="selected[q.id]" class="mt-1">
                             <div class="flex-1">
                                 <div class="text-xs text-gray-500" x-text="q.question_ref || ''"></div>
 
@@ -357,14 +341,6 @@ Alpine.data('pastPapersPage', () => ({
                                     <button @click="openRecrop(p.id, q)" class="text-xs text-indigo-600 block mt-1"
                                             x-text="q.image_filename ? 'Re-crop figure' : 'Set figure'"></button>
                                     <div class="mt-2 flex flex-wrap items-center gap-2">
-                                        <select class="border rounded px-1 py-0.5 text-xs"
-                                                @change="loadSubcats($event.target.value); tagOne(q, $event.target.value, '')">
-                                            <option value="">— category —</option>
-                                            <template x-for="c in categories" :key="c.id">
-                                                <option :value="c.id" :selected="q.category_id === c.id"
-                                                        x-text="c.name"></option>
-                                            </template>
-                                        </select>
                                         <button @click="startEdit(q)" class="text-xs text-indigo-600">Edit</button>
                                         <button @click="deleteQuestion(p.id, q)" class="text-xs text-red-600">Delete</button>
                                     </div>
@@ -391,6 +367,12 @@ Alpine.data('pastPapersPage', () => ({
             </div>
         </div>
     </template>
+
+    <datalist id="catnames-list">
+        <template x-for="n in catNames" :key="n">
+            <option :value="n"></option>
+        </template>
+    </datalist>
 
     <!-- Export / import result modal -->
     <div x-show="importResult || transferError" style="display:none"

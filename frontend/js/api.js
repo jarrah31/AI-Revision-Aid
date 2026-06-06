@@ -68,6 +68,7 @@ const API = {
     get(path) { return this.request('GET', path); },
     post(path, body, signal) { return this.request('POST', path, body, signal); },
     put(path, body) { return this.request('PUT', path, body); },
+    patch(path, body) { return this.request('PATCH', path, body); },
     del(path) { return this.request('DELETE', path); },
 
     async upload(path, formData) {
