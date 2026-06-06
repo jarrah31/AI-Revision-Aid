@@ -26,12 +26,14 @@ def list_past_papers(
 ):
     """List the user's past-paper batches for a subject, with question/figure counts."""
     rows = db.execute(
-        """SELECT b.id, b.filename, b.exam_board, b.exam_year, b.paper_number,
-                  b.tier, b.created_at,
+        """SELECT b.id, b.subject_id, b.filename, b.exam_board, b.exam_year,
+                  b.paper_number, b.tier, b.created_at, b.category_id,
+                  c.name AS category_name,
                   (SELECT COUNT(*) FROM questions q WHERE q.batch_id = b.id) AS question_count,
                   (SELECT COUNT(*) FROM questions q
                      WHERE q.batch_id = b.id AND q.image_id IS NOT NULL) AS figure_count
            FROM upload_batches b
+           LEFT JOIN categories c ON c.id = b.category_id
            WHERE b.user_id = ? AND b.subject_id = ? AND b.batch_type = 'past_paper'
            ORDER BY b.exam_year DESC, b.created_at DESC""",
         (user["id"], subject_id),

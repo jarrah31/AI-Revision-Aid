@@ -1,4 +1,5 @@
 import backend.routers.past_papers as past_papers
+from tests.conftest import _insert_user
 
 
 def _make_past_paper(db_conn, batch_id, board="AQA", year=2023, paper="Paper 1", tier="Foundation"):
@@ -522,3 +523,37 @@ def test_detect_multi_response_rejects_other_users_batch(
     r = client.post(f"/api/past-papers/{bid}/detect-multi-response",
                     headers={"Authorization": f"Bearer {token1}"})
     assert r.status_code == 404
+
+
+def test_list_past_papers_includes_category(client, db_conn, make_subject):
+    uid, token = _insert_user(db_conn, "catlist")
+    subject_id = make_subject(name="Biology")
+    cat = _make_category(db_conn, subject_id, name="Cells")
+    bid = db_conn.execute(
+        """INSERT INTO upload_batches
+           (user_id, subject_id, category_id, filename, pdf_path, page_start,
+            page_end, status, batch_type)
+           VALUES (?, ?, ?, 'p.pdf', 'batch_1.pdf', 1, 2, 'completed', 'past_paper')""",
+        (uid, subject_id, cat),
+    ).lastrowid
+    uncat_bid = db_conn.execute(
+        """INSERT INTO upload_batches
+           (user_id, subject_id, category_id, filename, pdf_path, page_start,
+            page_end, status, batch_type)
+           VALUES (?, ?, NULL, 'p2.pdf', 'batch_2.pdf', 1, 2, 'completed', 'past_paper')""",
+        (uid, subject_id),
+    ).lastrowid
+    db_conn.commit()
+
+    resp = client.get(
+        f"/api/past-papers?subject_id={subject_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    rows = {r["id"]: r for r in resp.json()}
+    row = rows[bid]
+    assert row["category_id"] == cat
+    assert row["category_name"] == "Cells"
+    uncat = rows[uncat_bid]
+    assert uncat["category_id"] is None
+    assert uncat["category_name"] is None
