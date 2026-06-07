@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 import anthropic
 
@@ -15,6 +16,8 @@ from backend.prompts.handwritten_ocr import HANDWRITTEN_OCR_PROMPT
 from backend.prompts.handwritten_qa import HANDWRITTEN_QA_PROMPT
 from backend.prompts.multiple_response_detection import MULTIPLE_RESPONSE_DETECTION_PROMPT
 from backend.services.text_match import bm25_shortlist
+
+logger = logging.getLogger(__name__)
 
 # ── Default models ─────────────────────────────────────────────────────────────
 # These are the hardcoded defaults; admins can override any of them via the
@@ -439,7 +442,6 @@ def match_ko_to_past_papers(
     if not ko_questions or not past_paper_questions:
         return [], empty_usage
 
-    client      = get_client()
     model       = _get_ai_setting("ai_model_matching")
     prompt_tmpl = _get_ai_setting("ai_prompt_matching")
     pp_by_id    = {q["id"]: q for q in past_paper_questions}
@@ -457,7 +459,23 @@ def match_ko_to_past_papers(
 
     usage = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "model": model}
     if not ko_items:
+        logger.info(
+            "match: BM25 shortlisted 0 candidates across %d KO question(s) vs %d "
+            "past-paper question(s) — no AI verification call made. The corpora share "
+            "no significant words (check they're the same subject/topic).",
+            len(ko_questions), len(past_paper_questions),
+        )
         return [], usage
+    logger.info(
+        "match: BM25 shortlisted candidates for %d/%d KO question(s); verifying in "
+        "chunks of %d.", len(ko_items), len(ko_questions), MATCH_CHUNK_SIZE,
+    )
+    if logger.isEnabledFor(logging.DEBUG):
+        for ko, cand_ids in ko_items:
+            logger.debug("match: KO %s -> %d candidate(s): %s",
+                         ko.get("id"), len(cand_ids), cand_ids)
+
+    client = get_client()
 
     # ── Stage 2: AI verification, chunked ─────────────────────────────────────
     # Each chunk sends its candidate exam questions ONCE as a dictionary, and each
@@ -506,7 +524,10 @@ def match_ko_to_past_papers(
             result = json.loads(_strip_fences(message.content[0].text))
         except Exception as e:
             # Non-fatal: this chunk contributes no matches, others still run.
-            print(f"[match_ko_to_past_papers] verification chunk failed (non-fatal): {e}")
+            logger.warning(
+                "match: verification chunk of %d KO point(s) failed (non-fatal): %s",
+                len(chunk), e,
+            )
             continue
 
         u = _calc_usage(message, model)
@@ -515,16 +536,25 @@ def match_ko_to_past_papers(
         usage["cost_usd"]      += u["cost_usd"]
 
         per_ko: dict[int, int] = {}
+        dropped = 0
         for m in result.get("matches", []):
             k = m.get("ko_question_id")
             p = m.get("past_paper_question_id")
             if k not in allowed or p not in allowed[k]:
-                continue  # invented / out-of-shortlist id → drop
+                dropped += 1  # invented / out-of-shortlist id → drop
+                continue
             if per_ko.get(k, 0) >= MATCH_MAX_PER_KO:
                 continue
             matches.append({"ko_question_id": k, "past_paper_question_id": p})
             per_ko[k] = per_ko.get(k, 0) + 1
+        if dropped:
+            logger.debug(
+                "match: dropped %d returned id(s) not in their KO point's shortlist "
+                "(hallucinated or cross-referenced).", dropped,
+            )
 
+    logger.info("match: %d match(es) verified across %d KO question(s) (cost $%.4f).",
+                len(matches), len(ko_items), usage["cost_usd"])
     return matches, usage
 
 

@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expiry_days: int = 30
     data_dir: Path = Path(__file__).parent.parent / "data"
+    # Root log level. Set LOG_LEVEL=DEBUG (env or .env) for verbose per-KO /
+    # per-chunk blend diagnostics; INFO (default) keeps the high-signal gate
+    # summaries that explain why a blend produced no matches.
+    log_level: str = "INFO"
 
     model_config = {"env_file": str(_env_path), "env_file_encoding": "utf-8"}
 

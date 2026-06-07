@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pathlib import Path
 
 from backend.database import init_db
+from backend.logging_config import configure_logging
 
 BASE_DIR = Path(__file__).parent.parent
 FRONTEND_DIR = BASE_DIR / "frontend"
@@ -15,11 +16,12 @@ DATA_DIR = BASE_DIR / "data"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    configure_logging()
     init_db()
     yield
 
 
-APP_VERSION = "1.5.4"
+APP_VERSION = "1.5.5"
 
 app = FastAPI(title="RevisionAid", version=APP_VERSION, lifespan=lifespan)
 

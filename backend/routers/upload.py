@@ -1,6 +1,7 @@
 import re
 import sqlite3
 import json
+import logging
 import traceback
 import uuid
 from pathlib import Path
@@ -29,6 +30,8 @@ from backend.services.claude_service import (
 from backend.services.multi_response_service import detect_and_store_multi_response
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -163,6 +166,13 @@ def _match_and_replace_with_past_papers(
         (batch_id,),
     ).fetchall()
     if not ko_questions:
+        logger.info(
+            "blend[batch=%s]: no ai_generated KO questions to match — nothing to blend. "
+            "(If this batch was already blended, its KO rows may have become "
+            "question_source='past_paper'; a legacy irreversible blend can't be "
+            "restored, leaving no ai_generated rows to re-match.)",
+            batch_id,
+        )
         return {"replaced": 0, "inserted": 0, "cost_usd": 0.0}
 
     # No LIMIT: the matcher needs the full past-paper corpus. (Large corpora raise AI token cost — an accepted trade-off.)
@@ -179,15 +189,26 @@ def _match_and_replace_with_past_papers(
         (subject_id, user_id),
     ).fetchall()
     if not past_paper_qs:
+        logger.info(
+            "blend[batch=%s]: no past-paper corpus for subject_id=%s user_id=%s "
+            "(need question_source='past_paper' rows in a batch_type='past_paper' "
+            "upload) — nothing to match against. %d KO questions went unmatched.",
+            batch_id, subject_id, user_id, len(ko_questions),
+        )
         return {"replaced": 0, "inserted": 0, "cost_usd": 0.0}  # No past papers uploaded yet — graceful no-op
 
+    logger.info(
+        "blend[batch=%s]: matching %d KO questions against %d past-paper questions "
+        "(subject_id=%s user_id=%s)",
+        batch_id, len(ko_questions), len(past_paper_qs), subject_id, user_id,
+    )
     try:
         matches, match_usage = match_ko_to_past_papers(
             [dict(q) for q in ko_questions],
             [dict(q) for q in past_paper_qs],
         )
     except Exception as e:
-        print(f"[match_ko_to_past_papers] matching failed: {e}")
+        logger.warning("blend[batch=%s]: matching call failed: %s", batch_id, e, exc_info=True)
         return {"replaced": 0, "inserted": 0, "cost_usd": 0.0}
 
     # Record the matching cost against the batch (the call happened regardless
@@ -206,6 +227,12 @@ def _match_and_replace_with_past_papers(
     db.commit()
 
     if not matches:
+        logger.info(
+            "blend[batch=%s]: matcher returned 0 matches across %d KO questions and "
+            "%d past-paper questions (cost $%.4f). Likely no lexical/semantic overlap, "
+            "or every candidate was rejected at verification.",
+            batch_id, len(ko_questions), len(past_paper_qs), match_usage["cost_usd"],
+        )
         return {"replaced": 0, "inserted": 0, "cost_usd": match_usage["cost_usd"]}
 
     # Group matches by KO question, preserving the order the matcher returned them.
@@ -287,7 +314,11 @@ def _match_and_replace_with_past_papers(
             kept += 1
 
     db.commit()
-    print(f"[match_ko_to_past_papers] replaced {replaced}, inserted {inserted} extra past-paper questions")
+    logger.info(
+        "blend[batch=%s]: replaced %d KO question(s) in place, inserted %d extra "
+        "past-paper question(s); %d total matches applied (cost $%.4f)",
+        batch_id, replaced, inserted, len(matches), match_usage["cost_usd"],
+    )
     return {"replaced": replaced, "inserted": inserted, "cost_usd": match_usage["cost_usd"]}
 
 
@@ -332,7 +363,11 @@ def regenerate_blend(
     """Re-run a KO batch's blend from scratch against the *current* past-paper
     corpus: restore the batch to its pre-blend state, then re-match. Returns the
     matcher summary plus the restore counts."""
+    logger.info("reblend[batch=%s]: starting regenerate (user_id=%s subject_id=%s)",
+                batch_id, user_id, subject_id)
     restore = _restore_blend(batch_id, db)
+    logger.info("reblend[batch=%s]: restored %d in-place row(s), deleted %d inserted row(s) "
+                "before re-matching", batch_id, restore["restored"], restore["deleted"])
     summary = _match_and_replace_with_past_papers(batch_id, user_id, subject_id, db)
     return {**summary, "restored": restore["restored"], "deleted": restore["deleted"]}
 

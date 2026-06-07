@@ -1,4 +1,5 @@
 """Tests for past-paper upload processing: matcher corpus + figure capture."""
+import logging
 import sqlite3
 
 import backend.routers.upload as upload
@@ -579,6 +580,66 @@ def test_blend_stashes_origin_and_flags_inserted(
         (ko_batch,)
     ).fetchone()["c"]
     assert extras == 1                               # the second match was inserted
+
+
+# ── Blend diagnostic logging (why a reblend produced no matches) ─────────────
+
+def test_blend_logs_when_no_ko_questions(
+    isolated_db, db_conn, regular_user, make_subject, make_batch, monkeypatch, caplog
+):
+    """An empty KO batch (no ai_generated rows) must log an identifiable gate
+    message rather than silently returning zero matches."""
+    monkeypatch.setattr(upload, "DB_PATH", isolated_db)
+    user_id, _ = regular_user
+    sid = make_subject()
+    ko_batch = make_batch(user_id, sid)  # no questions inserted
+
+    with caplog.at_level(logging.INFO, logger="backend.routers.upload"):
+        summary = upload._match_and_replace_with_past_papers(ko_batch, user_id, sid, db_conn)
+
+    assert summary["replaced"] == 0 and summary["inserted"] == 0
+    assert any("no ai_generated" in r.message.lower() for r in caplog.records), \
+        [r.message for r in caplog.records]
+
+
+def test_blend_logs_when_no_past_paper_corpus(
+    isolated_db, db_conn, regular_user, make_subject, make_batch, monkeypatch, caplog
+):
+    """KO questions exist but there's no past-paper corpus for this subject/user
+    — the most common Docker-instance cause of 'no matches'. Must be logged."""
+    monkeypatch.setattr(upload, "DB_PATH", isolated_db)
+    user_id, _ = regular_user
+    sid = make_subject()
+    ko_batch = make_batch(user_id, sid)
+    _make_ko_question(db_conn, ko_batch, user_id, sid)  # KO present, no past papers
+
+    with caplog.at_level(logging.INFO, logger="backend.routers.upload"):
+        summary = upload._match_and_replace_with_past_papers(ko_batch, user_id, sid, db_conn)
+
+    assert summary["replaced"] == 0 and summary["inserted"] == 0
+    assert any("no past-paper" in r.message.lower() for r in caplog.records), \
+        [r.message for r in caplog.records]
+
+
+def test_blend_logs_when_matcher_returns_no_matches(
+    isolated_db, db_conn, regular_user, make_subject, make_batch, monkeypatch, caplog
+):
+    """KO + past papers both exist but the matcher finds nothing — log it with
+    the corpus sizes so the cause (e.g. no lexical overlap) is visible."""
+    monkeypatch.setattr(upload, "DB_PATH", isolated_db)
+    user_id, _ = regular_user
+    sid = make_subject()
+    ko_batch = make_batch(user_id, sid)
+    _make_ko_question(db_conn, ko_batch, user_id, sid)
+    _make_pp_batch_with_questions(db_conn, user_id, sid, ["exam X"])
+    monkeypatch.setattr(upload, "match_ko_to_past_papers", lambda k, p: ([], _MATCH_USAGE))
+
+    with caplog.at_level(logging.INFO, logger="backend.routers.upload"):
+        summary = upload._match_and_replace_with_past_papers(ko_batch, user_id, sid, db_conn)
+
+    assert summary["replaced"] == 0 and summary["inserted"] == 0
+    assert any("0 matches" in r.message.lower() or "no matches" in r.message.lower()
+               for r in caplog.records), [r.message for r in caplog.records]
 
 
 def test_apply_ms_answers_flags_verified(

@@ -8,6 +8,7 @@ shortlist, chunked. The AI is mocked; we assert the orchestration:
   - a failed chunk is non-fatal.
 """
 import json
+import logging
 import types
 
 import backend.services.claude_service as cs
@@ -127,6 +128,26 @@ def test_failed_chunk_is_non_fatal(monkeypatch):
 
     matches, _ = cs.match_ko_to_past_papers(ko, pp)
     assert matches == [{"ko_question_id": 2, "past_paper_question_id": 20}]
+
+
+def test_empty_shortlist_logs_and_makes_no_api_call(monkeypatch, caplog):
+    """When BM25 finds no lexical candidates for any KO point, the matcher must
+    log it and skip the client entirely (no API call, no cost)."""
+    _stub_settings(monkeypatch)
+    ko = [{"id": 1, "question_text": "Define photosynthesis", "answer_text": ""}]
+    pp = [{"id": 2, "question_text": "Calculate the momentum of a trolley", "answer_text": "kg m/s"}]
+
+    def boom():
+        raise AssertionError("client must not be built when the shortlist is empty")
+    monkeypatch.setattr(cs, "get_client", boom)
+
+    with caplog.at_level(logging.INFO, logger="backend.services.claude_service"):
+        matches, usage = cs.match_ko_to_past_papers(ko, pp)
+
+    assert matches == []
+    assert usage["cost_usd"] == 0.0
+    assert any("shortlist" in r.message.lower() for r in caplog.records), \
+        [r.message for r in caplog.records]
 
 
 def test_empty_inputs_make_no_api_call(monkeypatch):
