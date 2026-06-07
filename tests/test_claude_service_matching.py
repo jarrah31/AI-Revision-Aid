@@ -130,6 +130,53 @@ def test_failed_chunk_is_non_fatal(monkeypatch):
     assert matches == [{"ko_question_id": 2, "past_paper_question_id": 20}]
 
 
+def test_long_answers_truncated_in_payload(monkeypatch):
+    """Candidate answers (and KO answers) can be huge mark-scheme rubrics. The
+    matcher only needs enough to judge topical equivalence, so the prompt payload
+    must truncate them to MATCH_ANSWER_CHAR_CAP — otherwise a single chunk's input
+    blows the per-minute input-token rate limit. Full text stays in the DB."""
+    _stub_settings(monkeypatch)
+    cap = cs.MATCH_ANSWER_CHAR_CAP
+    long_ko_answer = "KO " + "osmosis water " * 200          # >> cap
+    long_pp_answer = "PP " + "osmosis water " * 200
+    ko = [{"id": 1, "question_text": "Define osmosis", "answer_text": long_ko_answer}]
+    pp = [{"id": 2, "question_text": "What is osmosis?", "answer_text": long_pp_answer}]
+
+    captured = {}
+    def respond(prompt):
+        captured["payload"] = _payload(prompt)
+        return _FakeMessage(json.dumps({"matches": []}))
+    monkeypatch.setattr(cs, "get_client", lambda: _client_returning(respond))
+
+    cs.match_ko_to_past_papers(ko, pp)
+
+    sent_pp = captured["payload"]["exam_questions"][0]["answer"]
+    sent_ko = captured["payload"]["ko_points"][0]["ko_answer"]
+    # Truncated (with room for the ellipsis) and the full rubric never sent.
+    assert len(sent_pp) <= cap + 1
+    assert len(sent_ko) <= cap + 1
+    assert sent_pp.endswith("…") and sent_ko.endswith("…")
+    assert long_pp_answer not in json.dumps(captured["payload"])
+    assert long_ko_answer not in json.dumps(captured["payload"])
+
+
+def test_short_answers_not_truncated_in_payload(monkeypatch):
+    """Answers within the cap pass through unchanged — no spurious ellipsis."""
+    _stub_settings(monkeypatch)
+    ko = [{"id": 1, "question_text": "Define osmosis", "answer_text": "water movement"}]
+    pp = [{"id": 2, "question_text": "What is osmosis?", "answer_text": "movement of water"}]
+
+    captured = {}
+    def respond(prompt):
+        captured["payload"] = _payload(prompt)
+        return _FakeMessage(json.dumps({"matches": []}))
+    monkeypatch.setattr(cs, "get_client", lambda: _client_returning(respond))
+
+    cs.match_ko_to_past_papers(ko, pp)
+    assert captured["payload"]["exam_questions"][0]["answer"] == "movement of water"
+    assert captured["payload"]["ko_points"][0]["ko_answer"] == "water movement"
+
+
 def test_parses_json_with_prose_preamble(monkeypatch):
     """Some models ignore 'return ONLY JSON' and add a preamble. The matcher must
     still extract the JSON object rather than failing json.loads at char 0

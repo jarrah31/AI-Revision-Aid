@@ -471,6 +471,25 @@ MATCH_SHORTLIST_K = 12
 MATCH_CHUNK_SIZE  = 30
 MATCH_MAX_PER_KO  = 3
 
+# Per-field character cap for question/answer text sent to the matcher. Real
+# mark-scheme answers are full Level-3 essay rubrics (hundreds of words); sending
+# them whole pushes a single chunk's input past the per-minute input-token rate
+# limit (~30k/min), causing throttling and ~50s latencies that worsen as the
+# corpus grows. The matcher only needs the opening of each Q/A to judge topical
+# equivalence, so we truncate the payload (the full text stays in the DB / UI).
+MATCH_ANSWER_CHAR_CAP = 300
+
+
+def _truncate(text: str, max_chars: int = MATCH_ANSWER_CHAR_CAP) -> str:
+    """Cap ``text`` at ``max_chars``, appending a single-char ellipsis when cut.
+
+    The result is at most ``max_chars + 1`` characters. Whitespace at the cut
+    point is stripped so the ellipsis sits flush against the last word.
+    """
+    if not text or len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "…"
+
 
 def _chunk(seq: list, size: int):
     for i in range(0, len(seq), size):
@@ -554,16 +573,18 @@ def match_ko_to_past_papers(
                     seen.add(cid)
                     pool_ids.append(cid)
 
+        # Truncate every Q/A field — the matcher judges topical equivalence from
+        # the opening of each, and full rubrics would blow the input-token limit.
         exam_questions = [
             {"id": cid,
-             "question": pp_by_id[cid].get("question_text") or "",
-             "answer": pp_by_id[cid].get("answer_text") or ""}
+             "question": _truncate(pp_by_id[cid].get("question_text") or ""),
+             "answer": _truncate(pp_by_id[cid].get("answer_text") or "")}
             for cid in pool_ids
         ]
         ko_points = [
             {"ko_question_id": ko["id"],
-             "ko_question": ko.get("question_text") or "",
-             "ko_answer": ko.get("answer_text") or "",
+             "ko_question": _truncate(ko.get("question_text") or ""),
+             "ko_answer": _truncate(ko.get("answer_text") or ""),
              "candidate_ids": [cid for cid in cand_ids if cid in pp_by_id]}
             for ko, cand_ids in chunk
         ]
