@@ -14,6 +14,7 @@ from backend.prompts.matching import MATCHING_PROMPT
 from backend.prompts.handwritten_ocr import HANDWRITTEN_OCR_PROMPT
 from backend.prompts.handwritten_qa import HANDWRITTEN_QA_PROMPT
 from backend.prompts.multiple_response_detection import MULTIPLE_RESPONSE_DETECTION_PROMPT
+from backend.services.text_match import bm25_shortlist
 
 # ── Default models ─────────────────────────────────────────────────────────────
 # These are the hardcoded defaults; admins can override any of them via the
@@ -397,34 +398,134 @@ def judge_typed_answer(
     return json.loads(_strip_fences(message.content[0].text)), _calc_usage(message, model)
 
 
+# Hybrid-matcher tuning. Stage 1 (BM25) shortlists this many exam questions per
+# KO point; stage 2 (AI) only judges that shortlist. A chunk bundles this many KO
+# points into one verification call — larger chunks share more candidate text (it
+# is sent once per call as a dictionary), so they cost less per KO; the cap exists
+# only to bound the response size for very large knowledge organisers.
+MATCH_SHORTLIST_K = 12
+MATCH_CHUNK_SIZE  = 30
+MATCH_MAX_PER_KO  = 3
+
+
+def _chunk(seq: list, size: int):
+    for i in range(0, len(seq), size):
+        yield seq[i:i + size]
+
+
 def match_ko_to_past_papers(
     ko_questions: list[dict], past_paper_questions: list[dict]
 ) -> tuple[list[dict], dict]:
-    """Match knowledge organiser questions to equivalent past paper questions.
-    Model and prompt are read from DB settings (admin-configurable).
+    """Match knowledge-organiser questions to equivalent past-paper questions.
+
+    Hybrid retrieve-then-verify strategy:
+      1. BM25 (programmatic, free, deterministic) shortlists the top
+         MATCH_SHORTLIST_K lexically-closest exam questions for each KO point.
+      2. The model (DB-configurable model + prompt) judges only that shortlist,
+         in chunks of MATCH_CHUNK_SIZE KO points per call.
+
+    Why not one giant call: scanning the full corpus per KO point is expensive,
+    grows unboundedly with the corpus, is non-deterministic, and lets the model
+    invent past_paper_question_ids that don't exist. Constraining the model to a
+    pre-filtered shortlist makes calls small and cheap, and any id it returns is
+    validated against that KO point's own candidate set (hallucinations dropped).
+
     Returns (matches, usage) where matches is a list of
-    {"ko_question_id": int, "past_paper_question_id": int}.
+    {"ko_question_id": int, "past_paper_question_id": int}. Usage is summed across
+    all verification calls. A failed chunk is non-fatal: its KO points simply
+    yield no matches while every other chunk still contributes.
     """
-    client = get_client()
-    model  = _get_ai_setting("ai_model_matching")
+    empty_usage = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "model": None}
+    if not ko_questions or not past_paper_questions:
+        return [], empty_usage
 
-    ko_list = json.dumps(
-        [{"id": q["id"], "question": q["question_text"], "answer": q["answer_text"]} for q in ko_questions],
-        indent=2,
-    )
-    pp_list = json.dumps(
-        [{"id": q["id"], "question": q["question_text"], "answer": q["answer_text"]} for q in past_paper_questions],
-        indent=2,
-    )
-    prompt = _get_ai_setting("ai_prompt_matching").format(ko_list=ko_list, pp_list=pp_list)
+    client      = get_client()
+    model       = _get_ai_setting("ai_model_matching")
+    prompt_tmpl = _get_ai_setting("ai_prompt_matching")
+    pp_by_id    = {q["id"]: q for q in past_paper_questions}
 
-    message = client.messages.create(
-        model=model,
-        max_tokens=2048,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    result = json.loads(_strip_fences(message.content[0].text))
-    return result.get("matches", []), _calc_usage(message, model)
+    # ── Stage 1: programmatic shortlist ──────────────────────────────────────
+    shortlist = bm25_shortlist(ko_questions, past_paper_questions, top_k=MATCH_SHORTLIST_K)
+
+    # Keep only KO points that have at least one lexical candidate — the rest need
+    # no AI call. Each entry pairs the KO row with its shortlisted candidate ids.
+    ko_items: list[tuple[dict, list[int]]] = []
+    for ko in ko_questions:
+        cand_ids = [c["id"] for c in shortlist.get(ko["id"], [])]
+        if cand_ids:
+            ko_items.append((ko, cand_ids))
+
+    usage = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "model": model}
+    if not ko_items:
+        return [], usage
+
+    # ── Stage 2: AI verification, chunked ─────────────────────────────────────
+    # Each chunk sends its candidate exam questions ONCE as a dictionary, and each
+    # KO point references them by id. This avoids repeating shared candidate text
+    # across KO points (the dominant cost), so a chunk's input is bounded by the
+    # *union* of its shortlists rather than KO_count × shortlist_size.
+    matches: list[dict] = []
+    for chunk in _chunk(ko_items, MATCH_CHUNK_SIZE):
+        # Deduplicated candidate pool for this chunk, in first-seen order.
+        pool_ids: list[int] = []
+        seen: set[int] = set()
+        for _ko, cand_ids in chunk:
+            for cid in cand_ids:
+                if cid not in seen and cid in pp_by_id:
+                    seen.add(cid)
+                    pool_ids.append(cid)
+
+        exam_questions = [
+            {"id": cid,
+             "question": pp_by_id[cid].get("question_text") or "",
+             "answer": pp_by_id[cid].get("answer_text") or ""}
+            for cid in pool_ids
+        ]
+        ko_points = [
+            {"ko_question_id": ko["id"],
+             "ko_question": ko.get("question_text") or "",
+             "ko_answer": ko.get("answer_text") or "",
+             "candidate_ids": [cid for cid in cand_ids if cid in pp_by_id]}
+            for ko, cand_ids in chunk
+        ]
+        # Legitimate ids per KO point — used to reject any id the model invents or
+        # borrows from another KO point's list.
+        allowed = {ko["id"]: set(pts["candidate_ids"])
+                   for (ko, _c), pts in zip(chunk, ko_points)}
+
+        payload = json.dumps({"exam_questions": exam_questions, "ko_points": ko_points}, indent=2)
+        prompt = prompt_tmpl.format(payload=payload)
+        try:
+            message = client.messages.create(
+                model=model,
+                max_tokens=4096,  # shortlist-constrained output is small; headroom for a full chunk
+                messages=[{"role": "user", "content": prompt}],
+            )
+            if message.stop_reason == "max_tokens":
+                raise ValueError("verification response truncated (max_tokens)")
+            result = json.loads(_strip_fences(message.content[0].text))
+        except Exception as e:
+            # Non-fatal: this chunk contributes no matches, others still run.
+            print(f"[match_ko_to_past_papers] verification chunk failed (non-fatal): {e}")
+            continue
+
+        u = _calc_usage(message, model)
+        usage["input_tokens"]  += u["input_tokens"]
+        usage["output_tokens"] += u["output_tokens"]
+        usage["cost_usd"]      += u["cost_usd"]
+
+        per_ko: dict[int, int] = {}
+        for m in result.get("matches", []):
+            k = m.get("ko_question_id")
+            p = m.get("past_paper_question_id")
+            if k not in allowed or p not in allowed[k]:
+                continue  # invented / out-of-shortlist id → drop
+            if per_ko.get(k, 0) >= MATCH_MAX_PER_KO:
+                continue
+            matches.append({"ko_question_id": k, "past_paper_question_id": p})
+            per_ko[k] = per_ko.get(k, 0) + 1
+
+    return matches, usage
 
 
 def extract_sections_from_handwritten(image_b64: str) -> tuple[list, dict]:

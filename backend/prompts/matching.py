@@ -1,26 +1,24 @@
-MATCHING_PROMPT = """You are matching questions from a knowledge organiser (KO) to equivalent questions from GCSE/A-Level past exam papers.
+MATCHING_PROMPT = """You are matching knowledge-organiser (KO) revision points to equivalent GCSE/A-Level past exam questions.
 
-KO Questions (AI-extracted summaries of knowledge organiser content):
-{ko_list}
+You are given a batch as JSON with two parts:
+- "exam_questions": a dictionary of candidate exam questions, each with a unique id (listed once).
+- "ko_points": the knowledge-organiser points to match. Each KO point lists "candidate_ids" — the ONLY exam questions it may be matched to (these have been pre-filtered for topical relevance).
 
-Past Paper Questions (verbatim from real exam papers):
-{pp_list}
+{payload}
 
-Task: For each KO question, find ALL past paper questions (up to 3) that test the SAME specific knowledge point.
+For each KO point, decide which of ITS candidate exam questions (looked up by id in "exam_questions") genuinely test the SAME specific knowledge.
 
-Match criteria (ALL must be true for every match):
-- The same specific fact, concept, or skill is being tested
-- The past paper question is a genuine exam-quality equivalent
-- The answers are consistent (they would be marked the same way)
+A candidate matches its KO point only when ALL of these hold:
+- The same specific fact, concept, or skill is being tested.
+- The candidate is a genuine exam-quality equivalent of the KO point.
+- The answers are consistent (they would be marked the same way).
 
-Keeping multiple matches:
-- Include more than one past paper question for the same KO point ONLY when they ask for that knowledge in a genuinely different way (different phrasing, context, or question style) — this gives the student useful reinforcement.
-- Do NOT include verbatim or near-duplicate questions that merely repeat the same wording.
-- Return at most 3 past paper questions per KO question.
+Rules:
+- Match each KO point only against the ids in its own "candidate_ids" list. Never use an id outside that list, and never invent ids.
+- Return at most 3 matches per KO point. Prefer genuinely different phrasings, contexts, or question styles over near-duplicates.
+- Do not match on superficial word overlap when the knowledge content differs.
+- If a KO point has no genuine match, omit it.
 
-Do NOT match based on superficial word similarity if the knowledge content differs.
-Each past paper question can only be used for ONE KO question (no duplicates across KO questions).
-
-Return ONLY valid JSON. List one object per (KO question, past paper question) pair; the same ko_question_id may appear multiple times:
+Return ONLY valid JSON. List one object per (KO point, exam question) pair; the same ko_question_id may appear up to three times:
 {{"matches": [{{"ko_question_id": 123, "past_paper_question_id": 456}}, {{"ko_question_id": 123, "past_paper_question_id": 789}}]}}
-Return an empty matches array if no genuine matches exist."""
+Return {{"matches": []}} if nothing matches."""

@@ -446,13 +446,16 @@ def test_blend_logs_matching_cost(
 
 def test_matching_prompt_supports_multiple_and_formats():
     from backend.prompts.matching import MATCHING_PROMPT
-    # Format-string integrity: both placeholders must survive and no stray braces.
-    rendered = MATCHING_PROMPT.format(ko_list="[]", pp_list="[]")
-    assert "[]" in rendered
-    # Must instruct multiple matches per KO point, capped at 3.
-    assert "up to 3" in MATCHING_PROMPT
+    # Format-string integrity: the single {payload} placeholder must survive and
+    # the literal JSON braces in the examples must not break .format().
+    rendered = MATCHING_PROMPT.format(payload="<<DATA>>")
+    assert "<<DATA>>" in rendered
+    assert "{" in rendered and "matches" in rendered  # JSON example survived
+    # Must cap matches per KO point at 3 and steer away from near-duplicates.
+    assert "at most 3" in MATCHING_PROMPT
     lowered = MATCHING_PROMPT.lower()
-    assert "different way" in lowered
+    assert "candidate_ids" in lowered          # references the shortlist by id
+    assert "never invent" in lowered           # anti-hallucination instruction
 
 
 def _df(fid, paper_type, paper_number, tier, board="AQA", year=2024, filename=None):
@@ -782,3 +785,139 @@ def test_multi_status_accepts_multiple_ids(
     assert resp.status_code == 200
     returned = {row["id"] for row in resp.json()}
     assert returned == {b1, b2}
+
+
+def test_past_paper_related_image_index_as_list_does_not_drop_page(
+    isolated_db, db_conn, regular_user, make_subject, make_batch, monkeypatch
+):
+    """Regression: the model sometimes returns related_image_index as a LIST
+    (a question relating to multiple figures). dict.get(list) raised
+    'unhashable type: list', which the per-page handler caught and discarded
+    EVERY question on the page. The list must be coerced to its first index so
+    the question is kept and linked to that figure."""
+    monkeypatch.setattr(upload, "DB_PATH", isolated_db)
+    user_id, _ = regular_user
+    subject_id = make_subject()
+    batch_id = make_batch(user_id, subject_id)
+    _set_past_paper(db_conn, batch_id)
+
+    extraction_result = {
+        "page_type": "questions",
+        "questions": [
+            {
+                "question_ref": "1a",
+                "question": "Compare the two diagrams.",
+                "answer": "...",
+                "type": "compare",
+                "difficulty": 2,
+                "related_image_index": [0, 1],  # model returned a list, not an int
+            }
+        ],
+        "answers": [],
+        "images": [
+            {"description": "Diagram A", "bbox_x_pct": 0.0, "bbox_y_pct": 0.0,
+             "bbox_w_pct": 50.0, "bbox_h_pct": 50.0},
+            {"description": "Diagram B", "bbox_x_pct": 50.0, "bbox_y_pct": 0.0,
+             "bbox_w_pct": 50.0, "bbox_h_pct": 50.0},
+        ],
+    }
+    usage = {"input_tokens": 10, "output_tokens": 10, "cost_usd": 0.0}
+
+    monkeypatch.setattr(
+        upload, "extract_qa_from_past_paper", lambda b64, subj: (extraction_result, usage)
+    )
+    monkeypatch.setattr(upload, "render_page_to_png", lambda path, n: b"fakepng")
+    monkeypatch.setattr(upload, "save_full_page_image", lambda *a, **kw: "full.png")
+    monkeypatch.setattr(
+        upload, "crop_image_region",
+        lambda batch, page, i, *a, **kw: (f"crop_{i}.png", 10, 10),
+    )
+
+    upload.process_batch(
+        batch_id=batch_id, pdf_path="ignored.pdf", subject_name="Biology",
+        subject_id=subject_id, user_id=user_id, page_start=1, page_end=1,
+        batch_type="past_paper",
+    )
+
+    conn = sqlite3.connect(str(isolated_db))
+    conn.row_factory = sqlite3.Row
+    question = conn.execute(
+        "SELECT * FROM questions WHERE batch_id = ?", (batch_id,)
+    ).fetchone()
+    images = conn.execute(
+        "SELECT * FROM images WHERE batch_id = ? ORDER BY id", (batch_id,)
+    ).fetchall()
+    batch = conn.execute(
+        "SELECT error_message FROM upload_batches WHERE id = ?", (batch_id,)
+    ).fetchone()
+    conn.close()
+
+    # The page must NOT have been dropped.
+    assert question is not None
+    assert question["question_text"] == "Compare the two diagrams."
+    # Linked to the FIRST referenced figure.
+    assert question["image_id"] == images[0]["id"]
+    assert not (batch["error_message"] or "")
+
+
+def test_past_paper_null_bbox_does_not_drop_page(
+    isolated_db, db_conn, regular_user, make_subject, make_batch, monkeypatch
+):
+    """Regression: the model can emit an explicit null bbox value
+    (e.g. "bbox_x_pct": null). img_data.get("bbox_x_pct", 0) only defaults for
+    MISSING keys, so None flowed into crop_image_region's arithmetic and raised
+    'unsupported operand type(s) for -: NoneType and float', dropping the whole
+    page. Null bbox fields must be coerced to numeric defaults."""
+    monkeypatch.setattr(upload, "DB_PATH", isolated_db)
+    user_id, _ = regular_user
+    subject_id = make_subject()
+    batch_id = make_batch(user_id, subject_id)
+    _set_past_paper(db_conn, batch_id)
+
+    extraction_result = {
+        "page_type": "questions",
+        "questions": [
+            {"question_ref": "3a", "question": "Identify the labelled part.",
+             "answer": "...", "type": "diagram", "difficulty": 1,
+             "related_image_index": 0},
+        ],
+        "answers": [],
+        "images": [
+            {"description": "Figure", "bbox_x_pct": None, "bbox_y_pct": None,
+             "bbox_w_pct": None, "bbox_h_pct": None},  # explicit nulls
+        ],
+    }
+    usage = {"input_tokens": 10, "output_tokens": 10, "cost_usd": 0.0}
+
+    # Stub mirrors the real crop_image_region's None-sensitivity: it does the
+    # same arithmetic, so a None bbox raises exactly as in production.
+    def crop_like_real(batch, page, i, png, x, y, w, h):
+        _ = (x - 2.0, y - 2.0, x + w + 2.0, y + h + 2.0)  # raises on None
+        return ("crop.png", 10, 10)
+
+    monkeypatch.setattr(
+        upload, "extract_qa_from_past_paper", lambda b64, subj: (extraction_result, usage)
+    )
+    monkeypatch.setattr(upload, "render_page_to_png", lambda path, n: b"fakepng")
+    monkeypatch.setattr(upload, "save_full_page_image", lambda *a, **kw: "full.png")
+    monkeypatch.setattr(upload, "crop_image_region", crop_like_real)
+
+    upload.process_batch(
+        batch_id=batch_id, pdf_path="ignored.pdf", subject_name="Biology",
+        subject_id=subject_id, user_id=user_id, page_start=1, page_end=1,
+        batch_type="past_paper",
+    )
+
+    conn = sqlite3.connect(str(isolated_db))
+    conn.row_factory = sqlite3.Row
+    question = conn.execute(
+        "SELECT * FROM questions WHERE batch_id = ?", (batch_id,)
+    ).fetchone()
+    batch = conn.execute(
+        "SELECT error_message FROM upload_batches WHERE id = ?", (batch_id,)
+    ).fetchone()
+    conn.close()
+
+    assert question is not None
+    assert question["question_text"] == "Identify the labelled part."
+    assert not (batch["error_message"] or "")

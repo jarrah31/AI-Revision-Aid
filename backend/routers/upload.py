@@ -449,15 +449,20 @@ def process_batch(
                 # Process image regions — crop figures/diagrams for both KO and past-paper pages
                 image_id_map = {}  # index -> db image id
                 for i, img_data in enumerate(result.get("images", [])):
+                    # `.get(k, default)` only fires for MISSING keys; the model
+                    # can emit an explicit JSON null (e.g. "bbox_x_pct": null),
+                    # which would feed None into crop_image_region's arithmetic
+                    # and raise "NoneType - float", dropping the whole page.
+                    # Coerce null/None to a sensible numeric default.
                     filename, width, height = crop_image_region(
                         batch_id,
                         display_page,
                         i,
                         png_bytes,
-                        img_data.get("bbox_x_pct", 0),
-                        img_data.get("bbox_y_pct", 0),
-                        img_data.get("bbox_w_pct", 100),
-                        img_data.get("bbox_h_pct", 100),
+                        img_data.get("bbox_x_pct") if img_data.get("bbox_x_pct") is not None else 0,
+                        img_data.get("bbox_y_pct") if img_data.get("bbox_y_pct") is not None else 0,
+                        img_data.get("bbox_w_pct") if img_data.get("bbox_w_pct") is not None else 100,
+                        img_data.get("bbox_h_pct") if img_data.get("bbox_h_pct") is not None else 100,
                     )
                     cursor = db.execute(
                         """INSERT INTO images (batch_id, page_number, filename, description,
@@ -481,6 +486,13 @@ def process_batch(
                 # Store questions
                 for q in result.get("questions", []):
                     related_idx = q.get("related_image_index")
+                    # The model occasionally returns a LIST here (a question that
+                    # references multiple figures) instead of a single 0-based
+                    # index. dict.get(list) raises "unhashable type: list" and the
+                    # per-page handler would discard every question on the page.
+                    # Take the first referenced figure.
+                    if isinstance(related_idx, list):
+                        related_idx = related_idx[0] if related_idx else None
                     image_id = image_id_map.get(related_idx) if related_idx is not None else None
                     q_ref = _normalise_ref(q.get("question_ref", "")) or None
 

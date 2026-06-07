@@ -1,0 +1,153 @@
+"""Unit tests for the hybrid match_ko_to_past_papers (Claude call mocked).
+
+Strategy under test: BM25 shortlist (programmatic) -> AI verification of each
+shortlist, chunked. The AI is mocked; we assert the orchestration:
+  - returned ids are validated against each KO point's shortlist (no hallucinations),
+  - at most MATCH_MAX_PER_KO matches per KO point,
+  - usage is summed across chunks,
+  - a failed chunk is non-fatal.
+"""
+import json
+import types
+
+import backend.services.claude_service as cs
+
+
+class _FakeMessage:
+    def __init__(self, text, stop_reason="end_turn", in_tok=10, out_tok=20):
+        self.content = [types.SimpleNamespace(text=text)]
+        self.usage = types.SimpleNamespace(input_tokens=in_tok, output_tokens=out_tok)
+        self.stop_reason = stop_reason
+
+
+def _client_returning(fn):
+    """fn(prompt) -> _FakeMessage. Lets a test react to each chunk's prompt."""
+    class _C:
+        class messages:
+            @staticmethod
+            def create(**kwargs):
+                prompt = kwargs["messages"][0]["content"]
+                return fn(prompt)
+    return _C()
+
+
+def _stub_settings(monkeypatch):
+    monkeypatch.setattr(cs, "_get_ai_setting", lambda k: cs.AI_SETTING_DEFAULTS[k])
+
+
+def test_returns_validated_matches(monkeypatch):
+    _stub_settings(monkeypatch)
+    ko = [{"id": 1, "question_text": "Define osmosis", "answer_text": "water movement"}]
+    pp = [{"id": 2, "question_text": "What is osmosis?", "answer_text": "movement of water"}]
+
+    def respond(prompt):
+        return _FakeMessage(json.dumps({"matches": [
+            {"ko_question_id": 1, "past_paper_question_id": 2}
+        ]}))
+    monkeypatch.setattr(cs, "get_client", lambda: _client_returning(respond))
+
+    matches, usage = cs.match_ko_to_past_papers(ko, pp)
+    assert matches == [{"ko_question_id": 1, "past_paper_question_id": 2}]
+    assert usage["cost_usd"] > 0
+
+
+def test_drops_hallucinated_ids_not_in_shortlist(monkeypatch):
+    """An id the model returns that isn't in the KO point's candidate list is
+    dropped — this is the core anti-hallucination guarantee."""
+    _stub_settings(monkeypatch)
+    ko = [{"id": 1, "question_text": "Define osmosis", "answer_text": "water"}]
+    pp = [{"id": 2, "question_text": "What is osmosis?", "answer_text": "water"}]
+
+    def respond(prompt):
+        return _FakeMessage(json.dumps({"matches": [
+            {"ko_question_id": 1, "past_paper_question_id": 2},      # valid
+            {"ko_question_id": 1, "past_paper_question_id": 9999},   # invented
+        ]}))
+    monkeypatch.setattr(cs, "get_client", lambda: _client_returning(respond))
+
+    matches, _ = cs.match_ko_to_past_papers(ko, pp)
+    assert matches == [{"ko_question_id": 1, "past_paper_question_id": 2}]
+
+
+def test_caps_matches_per_ko(monkeypatch):
+    _stub_settings(monkeypatch)
+    ko = [{"id": 1, "question_text": "Explain osmosis water cell membrane", "answer_text": "water"}]
+    # five genuinely osmosis-related candidates so BM25 shortlists them all
+    pp = [{"id": 100 + i,
+           "question_text": f"Question about osmosis water membrane number {i}",
+           "answer_text": "water"} for i in range(5)]
+
+    def respond(prompt):
+        ids = _payload(prompt)["ko_points"][0]["candidate_ids"]
+        return _FakeMessage(json.dumps({"matches": [
+            {"ko_question_id": 1, "past_paper_question_id": pid} for pid in ids
+        ]}))
+    monkeypatch.setattr(cs, "get_client", lambda: _client_returning(respond))
+
+    matches, _ = cs.match_ko_to_past_papers(ko, pp)
+    assert len(matches) == cs.MATCH_MAX_PER_KO
+
+
+def test_chunks_and_sums_usage(monkeypatch):
+    """More KO points than MATCH_CHUNK_SIZE -> multiple calls, usage summed."""
+    _stub_settings(monkeypatch)
+    monkeypatch.setattr(cs, "MATCH_CHUNK_SIZE", 2)
+    ko = [{"id": i, "question_text": f"Define term osmosis concept {i}", "answer_text": "x"}
+          for i in range(1, 6)]  # 5 KO points -> 3 chunks at size 2
+    pp = [{"id": 50, "question_text": "Explain the term osmosis concept", "answer_text": "x"}]
+
+    calls = {"n": 0}
+    def respond(prompt):
+        calls["n"] += 1
+        return _FakeMessage(json.dumps({"matches": []}), in_tok=10, out_tok=5)
+    monkeypatch.setattr(cs, "get_client", lambda: _client_returning(respond))
+
+    _, usage = cs.match_ko_to_past_papers(ko, pp)
+    assert calls["n"] == 3
+    assert usage["input_tokens"] == 30  # 3 calls * 10
+
+
+def test_failed_chunk_is_non_fatal(monkeypatch):
+    """If one chunk errors, other chunks still contribute their matches."""
+    _stub_settings(monkeypatch)
+    monkeypatch.setattr(cs, "MATCH_CHUNK_SIZE", 1)
+    ko = [{"id": 1, "question_text": "Define osmosis water", "answer_text": "x"},
+          {"id": 2, "question_text": "Define respiration energy", "answer_text": "x"}]
+    pp = [{"id": 10, "question_text": "Explain osmosis water", "answer_text": "x"},
+          {"id": 20, "question_text": "Explain respiration energy", "answer_text": "x"}]
+
+    def respond(prompt):
+        item = _payload(prompt)["ko_points"][0]
+        if item["ko_question_id"] == 1:
+            return _FakeMessage("THIS IS NOT JSON")  # first chunk fails to parse
+        return _FakeMessage(json.dumps({"matches": [
+            {"ko_question_id": 2, "past_paper_question_id": 20}
+        ]}))
+    monkeypatch.setattr(cs, "get_client", lambda: _client_returning(respond))
+
+    matches, _ = cs.match_ko_to_past_papers(ko, pp)
+    assert matches == [{"ko_question_id": 2, "past_paper_question_id": 20}]
+
+
+def test_empty_inputs_make_no_api_call(monkeypatch):
+    _stub_settings(monkeypatch)
+    def boom():
+        raise AssertionError("client should not be built for empty inputs")
+    monkeypatch.setattr(cs, "get_client", boom)
+    assert cs.match_ko_to_past_papers([], [{"id": 1, "question_text": "x"}]) == (
+        [], {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "model": None})
+
+
+def _payload(prompt: str) -> dict:
+    """Extract the embedded {exam_questions, ko_points} JSON object from the
+    formatted prompt by brace-matching from its first '{'."""
+    start = prompt.index("{")
+    depth = 0
+    for i in range(start, len(prompt)):
+        if prompt[i] == "{":
+            depth += 1
+        elif prompt[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return json.loads(prompt[start:i + 1])
+    raise ValueError("no JSON object found in prompt")
