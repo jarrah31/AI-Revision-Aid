@@ -130,6 +130,61 @@ def test_failed_chunk_is_non_fatal(monkeypatch):
     assert matches == [{"ko_question_id": 2, "past_paper_question_id": 20}]
 
 
+def test_parses_json_with_prose_preamble(monkeypatch):
+    """Some models ignore 'return ONLY JSON' and add a preamble. The matcher must
+    still extract the JSON object rather than failing json.loads at char 0
+    (the real-world cause of a whole reblend silently returning 0 matches)."""
+    _stub_settings(monkeypatch)
+    ko = [{"id": 1, "question_text": "Define osmosis", "answer_text": "water"}]
+    pp = [{"id": 2, "question_text": "What is osmosis?", "answer_text": "water"}]
+    body = json.dumps({"matches": [{"ko_question_id": 1, "past_paper_question_id": 2}]})
+
+    def respond(prompt):
+        return _FakeMessage("Sure! Here are the matches you asked for:\n\n" + body)
+    monkeypatch.setattr(cs, "get_client", lambda: _client_returning(respond))
+
+    matches, _ = cs.match_ko_to_past_papers(ko, pp)
+    assert matches == [{"ko_question_id": 1, "past_paper_question_id": 2}]
+
+
+def test_parses_json_from_non_first_content_block(monkeypatch):
+    """If the model emits a non-text (e.g. thinking) block first, the JSON lives
+    in a later block. The matcher must scan all text blocks, not just content[0]."""
+    _stub_settings(monkeypatch)
+    ko = [{"id": 1, "question_text": "Define osmosis", "answer_text": "water"}]
+    pp = [{"id": 2, "question_text": "What is osmosis?", "answer_text": "water"}]
+    body = json.dumps({"matches": [{"ko_question_id": 1, "past_paper_question_id": 2}]})
+
+    def respond(prompt):
+        msg = _FakeMessage(body)
+        # leading block has no `.text` (mimics a thinking block); JSON is in [1].
+        msg.content = [types.SimpleNamespace(thinking="reasoning…"),
+                       types.SimpleNamespace(text=body)]
+        return msg
+    monkeypatch.setattr(cs, "get_client", lambda: _client_returning(respond))
+
+    matches, _ = cs.match_ko_to_past_papers(ko, pp)
+    assert matches == [{"ko_question_id": 1, "past_paper_question_id": 2}]
+
+
+def test_unparseable_response_logs_raw_preview(monkeypatch, caplog):
+    """When a chunk truly can't be parsed, the warning must carry the raw response
+    preview + stop_reason so the cause is diagnosable from logs alone."""
+    _stub_settings(monkeypatch)
+    ko = [{"id": 1, "question_text": "Define osmosis", "answer_text": "water"}]
+    pp = [{"id": 2, "question_text": "What is osmosis?", "answer_text": "water"}]
+
+    def respond(prompt):
+        return _FakeMessage("I cannot help with that request.", stop_reason="end_turn")
+    monkeypatch.setattr(cs, "get_client", lambda: _client_returning(respond))
+
+    with caplog.at_level(logging.WARNING, logger="backend.services.claude_service"):
+        matches, _ = cs.match_ko_to_past_papers(ko, pp)
+    assert matches == []
+    warning = " ".join(r.message for r in caplog.records)
+    assert "raw_preview" in warning and "I cannot help" in warning
+
+
 def test_empty_shortlist_logs_and_makes_no_api_call(monkeypatch, caplog):
     """When BM25 finds no lexical candidates for any KO point, the matcher must
     log it and skip the client entirely (no API call, no cost)."""

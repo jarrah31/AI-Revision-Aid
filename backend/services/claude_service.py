@@ -133,6 +133,67 @@ def _strip_fences(text: str) -> str:
     return text
 
 
+def _first_json_object(text: str) -> str | None:
+    """Return the first balanced top-level ``{...}`` object in ``text``, or None.
+
+    Tolerates prose/preamble around the JSON (some models ignore "return ONLY
+    JSON"). Brace-aware of string literals so braces inside quoted values don't
+    throw off the depth count.
+    """
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(text)):
+        c = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None
+
+
+def _message_text(message) -> str:
+    """Concatenate the text of every text-bearing content block.
+
+    Robust to a leading non-text block (e.g. a thinking/redacted block) that has
+    no ``.text`` attribute — those are simply skipped.
+    """
+    parts = []
+    for block in (getattr(message, "content", None) or []):
+        t = getattr(block, "text", None)
+        if t:
+            parts.append(t)
+    return "".join(parts)
+
+
+def _loads_json_response(message) -> dict:
+    """Parse a model response into a dict, tolerating prose preamble/trailing
+    text and JSON that isn't in the first content block. Raises ValueError if no
+    JSON object can be recovered (caller logs a diagnostic with the raw text)."""
+    raw = _strip_fences(_message_text(message))
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        candidate = _first_json_object(raw)
+        if candidate is None:
+            raise ValueError("no JSON object found in response")
+        return json.loads(candidate)
+
+
 # ── Extraction functions ────────────────────────────────────────────────────────
 
 def extract_qa_from_page(image_b64: str, subject: str) -> tuple[dict, dict]:
@@ -513,27 +574,44 @@ def match_ko_to_past_papers(
 
         payload = json.dumps({"exam_questions": exam_questions, "ko_points": ko_points}, indent=2)
         prompt = prompt_tmpl.format(payload=payload)
+
         try:
             message = client.messages.create(
                 model=model,
                 max_tokens=4096,  # shortlist-constrained output is small; headroom for a full chunk
                 messages=[{"role": "user", "content": prompt}],
             )
-            if message.stop_reason == "max_tokens":
-                raise ValueError("verification response truncated (max_tokens)")
-            result = json.loads(_strip_fences(message.content[0].text))
         except Exception as e:
-            # Non-fatal: this chunk contributes no matches, others still run.
+            # API/transport error: nothing returned, nothing to bill. Non-fatal.
             logger.warning(
-                "match: verification chunk of %d KO point(s) failed (non-fatal): %s",
-                len(chunk), e,
+                "match: verification chunk of %d KO point(s) — API call failed "
+                "(non-fatal): %s", len(chunk), e,
             )
             continue
 
+        # The call returned, so it incurred cost — record it even if parsing the
+        # body fails below (otherwise a parse failure misleadingly reads as $0).
         u = _calc_usage(message, model)
         usage["input_tokens"]  += u["input_tokens"]
         usage["output_tokens"] += u["output_tokens"]
         usage["cost_usd"]      += u["cost_usd"]
+
+        try:
+            if message.stop_reason == "max_tokens":
+                raise ValueError("response truncated (max_tokens) — chunk too large")
+            result = _loads_json_response(message)
+        except Exception as e:
+            # Non-fatal: this chunk contributes no matches, others still run. Log
+            # the raw response so an unparseable body is diagnosable from the logs.
+            logger.warning(
+                "match: verification chunk of %d KO point(s) — could not parse "
+                "response (non-fatal): %s [stop_reason=%s blocks=%s raw_preview=%r]",
+                len(chunk), e,
+                getattr(message, "stop_reason", None),
+                [type(b).__name__ for b in (getattr(message, "content", None) or [])],
+                _message_text(message)[:300],
+            )
+            continue
 
         per_ko: dict[int, int] = {}
         dropped = 0
