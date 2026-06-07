@@ -181,6 +181,9 @@ def _attach_source_meta(questions: list[dict], db: sqlite3.Connection) -> None:
                 prov["filename"] = m["filename"]
                 prov["exam_board"] = m["exam_board"]
                 prov["exam_year"] = m["exam_year"]
+            # True only when the answer was taken verbatim from an uploaded mark
+            # scheme — drives the "verified mark scheme" badge in the quiz UI.
+            prov["mark_scheme_verified"] = bool(q.get("answer_from_mark_scheme"))
         q["provenance"] = prov
 
 

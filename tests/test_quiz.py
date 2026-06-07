@@ -672,6 +672,33 @@ def test_start_quiz_attaches_provenance(
     assert ex["exam_year"] == 2023
 
 
+def test_start_quiz_provenance_marks_verified_mark_scheme(
+    client, user_headers, regular_user, make_subject, make_batch, make_question, db_conn
+):
+    """A past-paper question whose answer came from an uploaded mark scheme
+    (answer_from_mark_scheme=1) is flagged mark_scheme_verified for the badge;
+    an AI-inferred one is not."""
+    uid, _ = regular_user
+    sid = make_subject()
+    pp = _make_exam_batch(db_conn, uid, sid, make_batch, "AQA-Bio-P2H.pdf")
+    verified = make_question(pp, uid, sid, question_source="past_paper",
+                             question_text="verified exam q")
+    make_question(pp, uid, sid, question_source="past_paper",
+                  question_text="inferred exam q")
+    db_conn.execute(
+        "UPDATE questions SET answer_from_mark_scheme = 1 WHERE id = ?", (verified,)
+    )
+    db_conn.commit()
+
+    r = client.post("/api/quiz/start", json={"subject_id": sid, "count": 20},
+                    headers=user_headers)
+    assert r.status_code == 200
+    by_text = {q["question_text"]: q["provenance"] for q in r.json()["questions"]}
+
+    assert by_text["verified exam q"]["mark_scheme_verified"] is True
+    assert by_text["inferred exam q"]["mark_scheme_verified"] is False
+
+
 def test_start_quiz_provenance_blended_uses_source_batch(
     client, user_headers, regular_user, make_subject, make_batch, make_question, db_conn
 ):

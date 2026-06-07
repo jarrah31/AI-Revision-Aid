@@ -815,6 +815,11 @@
                       class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 font-medium">
                     📄 Exam question
                 </span>
+                <span x-show="currentQuestion?.provenance?.mark_scheme_verified"
+                      class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-medium"
+                      title="The expected answer is taken from the official mark scheme">
+                    ✓ Mark scheme
+                </span>
                 <span x-show="currentQuestion?.provenance?.paper_number"
                       class="inline-flex items-center text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600"
                       x-text="examPaperLabel(currentQuestion?.provenance?.paper_number)"></span>
@@ -857,6 +862,10 @@
                     <div class="bg-green-50 rounded-lg p-4">
                         <p class="text-sm font-medium text-green-700">Answer:</p>
                         <p class="text-green-800 mt-1" x-text="currentQuestion?.answer_text"></p>
+                        <p x-show="currentQuestion?.provenance?.mark_scheme_verified"
+                           class="inline-flex items-center gap-1 text-xs mt-2 text-emerald-700">
+                            ✓ From the official mark scheme
+                        </p>
                     </div>
                     <p class="text-sm text-gray-500 text-center">How well did you know this?</p>
                     <div class="grid grid-cols-4 gap-2">
@@ -972,6 +981,10 @@
                     <p class="text-sm mt-1"
                        :class="result?.is_correct ? 'text-green-600' : 'text-red-600'"
                        x-text="'Answer: ' + (result?.correct_answer || '')"></p>
+                    <p x-show="currentQuestion?.provenance?.mark_scheme_verified"
+                       class="inline-flex items-center gap-1 text-xs mt-1.5 text-emerald-700">
+                        ✓ From the official mark scheme
+                    </p>
                     <p x-show="result?.feedback" class="text-sm mt-2 text-gray-600" x-text="result?.feedback"></p>
                 </div>
                 <div x-show="currentFormat === 'multi_response'" class="space-y-1.5">

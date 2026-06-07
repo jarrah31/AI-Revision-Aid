@@ -581,6 +581,107 @@ def test_blend_stashes_origin_and_flags_inserted(
     assert extras == 1                               # the second match was inserted
 
 
+def test_apply_ms_answers_flags_verified(
+    isolated_db, db_conn, regular_user, make_subject, make_batch, monkeypatch
+):
+    """A matched mark-scheme answer overwrites answer_text AND sets
+    answer_from_mark_scheme=1, so the quiz can badge it as authoritative."""
+    monkeypatch.setattr(upload, "DB_PATH", isolated_db)
+    user_id, _ = regular_user
+    sid = make_subject()
+    batch = make_batch(user_id, sid)
+    matched = db_conn.execute(
+        """INSERT INTO questions (batch_id, user_id, subject_id, page_number,
+           question_text, answer_text, question_source, question_ref)
+           VALUES (?, ?, ?, 1, 'Q1', 'inferred ans', 'past_paper', '1a')""",
+        (batch, user_id, sid),
+    ).lastrowid
+    unmatched = db_conn.execute(
+        """INSERT INTO questions (batch_id, user_id, subject_id, page_number,
+           question_text, answer_text, question_source, question_ref)
+           VALUES (?, ?, ?, 1, 'Q2', 'inferred ans', 'past_paper', '2b')""",
+        (batch, user_id, sid),
+    ).lastrowid
+    db_conn.commit()
+
+    updated = upload._apply_ms_answers(batch, {"1a": "official MS answer"}, db_conn)
+    assert updated == 1
+
+    row = db_conn.execute(
+        "SELECT answer_text, answer_from_mark_scheme FROM questions WHERE id = ?", (matched,)
+    ).fetchone()
+    assert row["answer_text"] == "official MS answer"
+    assert row["answer_from_mark_scheme"] == 1
+
+    # A question with no mark-scheme match stays unverified.
+    other = db_conn.execute(
+        "SELECT answer_from_mark_scheme FROM questions WHERE id = ?", (unmatched,)
+    ).fetchone()
+    assert other["answer_from_mark_scheme"] == 0
+
+
+def test_blend_carries_mark_scheme_verified_flag(
+    isolated_db, db_conn, regular_user, make_subject, make_batch, monkeypatch
+):
+    """When a blended exam answer came from a verified mark scheme, the blended
+    KO row inherits answer_from_mark_scheme; an unverified exam answer does not."""
+    monkeypatch.setattr(upload, "DB_PATH", isolated_db)
+    user_id, _ = regular_user
+    sid = make_subject()
+    ko_batch = make_batch(user_id, sid)
+    ko_q = _make_ko_question(db_conn, ko_batch, user_id, sid, text="ORIGINAL KO")
+    pp_ids = _make_pp_batch_with_questions(db_conn, user_id, sid, ["exam X", "exam Y"])
+    # Only the first exam answer is mark-scheme-verified.
+    db_conn.execute(
+        "UPDATE questions SET answer_from_mark_scheme = 1 WHERE id = ?", (pp_ids[0],)
+    )
+    db_conn.commit()
+
+    monkeypatch.setattr(upload, "match_ko_to_past_papers",
+        lambda k, p: ([{"ko_question_id": ko_q, "past_paper_question_id": pid} for pid in pp_ids], _MATCH_USAGE))
+    upload._match_and_replace_with_past_papers(ko_batch, user_id, sid, db_conn)
+
+    # First match replaced the KO row in place -> inherits verified flag.
+    replaced = db_conn.execute(
+        "SELECT answer_from_mark_scheme FROM questions WHERE id = ?", (ko_q,)
+    ).fetchone()
+    assert replaced["answer_from_mark_scheme"] == 1
+    # Second match was inserted from an unverified exam answer -> stays 0.
+    inserted = db_conn.execute(
+        "SELECT answer_from_mark_scheme FROM questions "
+        "WHERE batch_id = ? AND blend_inserted = 1", (ko_batch,)
+    ).fetchone()
+    assert inserted["answer_from_mark_scheme"] == 0
+
+
+def test_restore_blend_clears_mark_scheme_flag(
+    isolated_db, db_conn, regular_user, make_subject, make_batch, monkeypatch
+):
+    """Reverting a blend restores the AI question, which is never mark-scheme
+    verified — so the flag set by the exam match must be cleared back to 0."""
+    monkeypatch.setattr(upload, "DB_PATH", isolated_db)
+    user_id, _ = regular_user
+    sid = make_subject()
+    ko_batch = make_batch(user_id, sid)
+    ko_q = _make_ko_question(db_conn, ko_batch, user_id, sid, text="ORIGINAL KO")
+    pp_ids = _make_pp_batch_with_questions(db_conn, user_id, sid, ["exam X"])
+    db_conn.execute(
+        "UPDATE questions SET answer_from_mark_scheme = 1 WHERE id = ?", (pp_ids[0],)
+    )
+    db_conn.commit()
+    monkeypatch.setattr(upload, "match_ko_to_past_papers",
+        lambda k, p: ([{"ko_question_id": ko_q, "past_paper_question_id": pp_ids[0]}], _MATCH_USAGE))
+    upload._match_and_replace_with_past_papers(ko_batch, user_id, sid, db_conn)
+    assert db_conn.execute(
+        "SELECT answer_from_mark_scheme FROM questions WHERE id = ?", (ko_q,)
+    ).fetchone()["answer_from_mark_scheme"] == 1   # set by the blend
+
+    upload._restore_blend(ko_batch, db_conn)
+    assert db_conn.execute(
+        "SELECT answer_from_mark_scheme FROM questions WHERE id = ?", (ko_q,)
+    ).fetchone()["answer_from_mark_scheme"] == 0   # cleared on restore
+
+
 def test_blend_records_source_batch_id(
     isolated_db, db_conn, regular_user, make_subject, make_batch, monkeypatch
 ):

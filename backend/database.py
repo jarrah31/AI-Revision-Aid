@@ -355,6 +355,11 @@ def init_db():
         # paper/tier/filename provenance pills. NULL for AI and standalone rows
         # (standalone past-paper questions already live in their exam batch).
         "ALTER TABLE questions ADD COLUMN source_batch_id INTEGER DEFAULT NULL REFERENCES upload_batches(id) ON DELETE SET NULL",
+        # Set to 1 only when an answer was taken verbatim from an uploaded mark
+        # scheme (matched by question_ref in _apply_ms_answers). Lets the quiz
+        # show a "verified mark scheme" badge so students know the expected
+        # answer is authoritative rather than AI-inferred. Default 0 = unverified.
+        "ALTER TABLE questions ADD COLUMN answer_from_mark_scheme INTEGER NOT NULL DEFAULT 0",
     ]:
         try:
             db.execute(migration)
