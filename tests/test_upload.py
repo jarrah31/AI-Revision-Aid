@@ -1223,3 +1223,37 @@ def test_restore_blend_clears_grounding(
                           "FROM questions WHERE id = ?", (ko_q,)).fetchone()
     assert row[0] == "ai_generated"
     assert row[1] is None and row[2] is None
+
+
+def test_grounding_persists_on_inserted_row(
+    isolated_db, db_conn, regular_user, make_subject, make_batch, monkeypatch
+):
+    """Two surviving matches for one KO point: the first replaces in place, the
+    second is INSERTed as an extra row — both new columns must land on the insert."""
+    monkeypatch.setattr(upload, "DB_PATH", isolated_db)
+    uid, _ = regular_user
+    sid = make_subject()
+    ko_batch = make_batch(uid, sid)
+    pp_batch = make_batch(uid, sid)
+    _set_past_paper(db_conn, pp_batch)
+    ko_q = _insert_q(db_conn, ko_batch, uid, sid, "ai_generated", "What is an organ?")
+    pp1 = _insert_q(db_conn, pp_batch, uid, sid, "past_paper", "Name a group of tissues")
+    pp2 = _insert_q(db_conn, pp_batch, uid, sid, "past_paper", "Define organ")
+
+    _patch_blend(monkeypatch,
+                 [{"ko_question_id": ko_q, "past_paper_question_id": pp1},
+                  {"ko_question_id": ko_q, "past_paper_question_id": pp2}],
+                 lambda ko, png, cands: [
+                     {"past_paper_question_id": c["id"], "supported": True,
+                      "reasoning": f"reason-{c['id']}",
+                      "bbox_pct": {"x": 1, "y": 1, "w": 10, "h": 10}, "snippet": "s"}
+                     for c in cands])
+
+    upload._match_and_replace_with_past_papers(ko_batch, uid, sid, db_conn)
+
+    ins = db_conn.execute(
+        "SELECT ko_grounding_reasoning, ko_crop_filename FROM questions "
+        "WHERE batch_id = ? AND blend_inserted = 1", (ko_batch,)).fetchone()
+    assert ins is not None
+    assert ins[0] == f"reason-{pp2}"
+    assert ins[1] == f"batch_{ko_batch}/page_1_kocrop_{ko_q}_{pp2}.png"
