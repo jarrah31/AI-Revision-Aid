@@ -831,3 +831,29 @@ def test_count_filters_by_batch(
         headers=user_headers,
     )
     assert r.json()["count"] == 1
+
+
+def test_start_quiz_filters_by_batch(
+    client, user_headers, regular_user, make_subject, make_batch, make_question, db_conn
+):
+    """Starting a quiz with batch_ids draws questions only from those uploads."""
+    uid, _ = regular_user
+    sid = make_subject()
+    ko, pp = _blend_fixture(db_conn, uid, sid, make_batch, make_question)
+
+    # Restrict to the standalone past-paper batch → only its two questions.
+    r = client.post("/api/quiz/start",
+                    json={"subject_id": sid, "batch_ids": [pp], "count": 20},
+                    headers=user_headers)
+    assert r.status_code == 200
+    texts = {q["question_text"] for q in r.json()["questions"]}
+    assert texts == {"standalone 1", "standalone 2"}
+
+    # Restrict to the KO booklet → its 3 questions, none from the standalone batch.
+    r = client.post("/api/quiz/start",
+                    json={"subject_id": sid, "batch_ids": [ko], "count": 20},
+                    headers=user_headers)
+    assert r.status_code == 200
+    texts = {q["question_text"] for q in r.json()["questions"]}
+    assert "standalone 1" not in texts and "standalone 2" not in texts
+    assert "blended exam" in texts

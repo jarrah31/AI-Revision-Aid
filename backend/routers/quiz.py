@@ -45,6 +45,7 @@ class QuizStartRequest(BaseModel):
     subject_id: int | None = None
     category_ids: list[int] | None = None      # multi-select
     subcategory_ids: list[int] | None = None   # multi-select
+    batch_ids: list[int] | None = None          # restrict to specific uploads; None/empty = all
     count: int = 20
     modes: list[str] | None = None  # e.g. ['flashcard','typed']; None/empty = all three
     question_sources: list[str] | None = None  # subset of ['ai_generated','past_paper','blended']; None = all
@@ -352,6 +353,10 @@ def start_quiz(
     if src_filter:
         conditions.append(src_filter)
         params.extend(src_params)
+    batch_f, batch_p = _batch_filter(req.batch_ids)
+    if batch_f:
+        conditions.append(batch_f)
+        params.extend(batch_p)
     where = " AND ".join(conditions)
 
     # 1. Overdue cards
