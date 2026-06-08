@@ -18,6 +18,7 @@ from backend.services.pdf_processor import (
     png_to_base64,
     get_pdf_page_count,
     load_image_as_png_bytes,
+    save_ko_crop,
 )
 from backend.services.claude_service import (
     extract_qa_from_page_with_fallback,
@@ -26,6 +27,7 @@ from backend.services.claude_service import (
     match_ko_to_past_papers,
     extract_sections_from_handwritten,
     extract_qa_from_text,
+    ground_matches_to_ko,
 )
 from backend.services.multi_response_service import detect_and_store_multi_response
 
@@ -34,6 +36,16 @@ DATA_DIR = Path(__file__).parent.parent.parent / "data"
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _load_ko_page_png(batch_id: int, page_number: int) -> bytes | None:
+    """Return the saved full-page PNG bytes for a KO page, or None if absent
+    (e.g. a legacy batch processed before page images were stored)."""
+    path = DATA_DIR / "images" / f"batch_{batch_id}" / f"page_{page_number}_full.png"
+    try:
+        return path.read_bytes()
+    except OSError:
+        return None
 
 # Page types that contain exam questions
 _QUESTION_PAGE_TYPES = {"questions", "both"}
@@ -247,13 +259,58 @@ def _match_and_replace_with_past_papers(
     used_pp_ids: set[int] = set()
     replaced = 0
     inserted = 0
+    grounding_dropped = 0
+    # Grounding cost is tracked separately: the matcher's api_usage row + batch cost
+    # were already written above, so grounding gets its own 'ko_grounding' row below.
+    grounding_usage = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "model": None}
     for ko_q_id, pp_ids in grouped.items():
         ko_q = next((q for q in ko_questions if q["id"] == ko_q_id), None)
         if not ko_q:
             continue
 
+        # ── Grounding: vision-verify each candidate against the KO page, drop
+        #    unsupported ones, and crop the supporting region for survivors. ──
+        candidates, seen_c = [], set()
+        for pid in pp_ids:
+            if pid in seen_c:
+                continue
+            seen_c.add(pid)
+            pp = next((q for q in past_paper_qs if q["id"] == pid), None)
+            if pp:
+                candidates.append(dict(pp))
+
+        ground: dict[int, dict] = {}  # pp_id -> {"reasoning", "crop_filename"}
+        if candidates:
+            ko_png = _load_ko_page_png(batch_id, ko_q["page_number"])
+            results, g_usage = ground_matches_to_ko(dict(ko_q), ko_png, candidates)
+            grounding_usage["input_tokens"]  += g_usage["input_tokens"]
+            grounding_usage["output_tokens"] += g_usage["output_tokens"]
+            grounding_usage["cost_usd"]      += g_usage["cost_usd"]
+            grounding_usage["model"] = g_usage.get("model") or grounding_usage["model"]
+            for r in results:
+                if not r["supported"]:
+                    grounding_dropped += 1
+                    continue
+                crop_filename = None
+                if ko_png and r["bbox_pct"]:
+                    try:
+                        crop_filename = save_ko_crop(
+                            batch_id=batch_id, page_number=ko_q["page_number"],
+                            ko_id=ko_q_id, pp_id=r["past_paper_question_id"],
+                            png_bytes=ko_png, bbox_pct=r["bbox_pct"],
+                        )
+                    except Exception:
+                        crop_filename = None
+                ground[r["past_paper_question_id"]] = {
+                    "reasoning": r["reasoning"] or None,
+                    "crop_filename": crop_filename,
+                }
+
+        # Only ids that survived grounding, in the matcher's original order.
+        surviving = [pid for pid in dict.fromkeys(pp_ids) if pid in ground]
+
         kept = 0
-        for pp_q_id in pp_ids:
+        for pp_q_id in surviving:
             if kept >= 3:
                 break  # cap: at most 3 exam questions per KO point
             if pp_q_id in used_pp_ids:
@@ -262,16 +319,14 @@ def _match_and_replace_with_past_papers(
             if not pp_q:
                 continue
             used_pp_ids.add(pp_q_id)
+            g = ground.get(pp_q_id, {})
+            g_reason = g.get("reasoning")
+            g_crop = g.get("crop_filename")
 
             parts = [pp_q["exam_board"] or "", str(pp_q["exam_year"] or ""), pp_q["paper_number"] or ""]
             source_detail = " ".join(p for p in parts if p).strip() or None
 
             if kept == 0:
-                # First match: replace the AI-generated question in place, but
-                # stash the original AI question first (SQLite evaluates the SET
-                # right-hand sides against the pre-update row, so blend_origin_*
-                # captures the old values). This makes the replace reversible so
-                # the blend can be regenerated later — see _restore_blend.
                 db.execute(
                     """UPDATE questions
                        SET blend_origin_text = question_text,
@@ -284,42 +339,60 @@ def _match_and_replace_with_past_papers(
                            options_json = ?,
                            source_batch_id = ?,
                            answer_from_mark_scheme = ?,
+                           ko_grounding_reasoning = ?,
+                           ko_crop_filename = ?,
                            updated_at = datetime('now')
                        WHERE id = ?""",
                     (pp_q["question_text"], pp_q["answer_text"], source_detail,
                      pp_q["options_json"], pp_q["source_batch_id"],
-                     pp_q["answer_from_mark_scheme"], ko_q_id),
+                     pp_q["answer_from_mark_scheme"], g_reason, g_crop, ko_q_id),
                 )
                 replaced += 1
             else:
-                # Extra matches: insert new past-paper rows into the same KO batch,
-                # inheriting the KO question's topic tags and approval state.
-                # blend_inserted=1 marks them as blend-generated so a regenerate
-                # can tear them down again (see _restore_blend).
                 db.execute(
                     """INSERT INTO questions
                        (batch_id, user_id, subject_id, category_id, subcategory_id,
                         page_number, question_text, answer_text, question_type, difficulty,
                         approved, question_source, question_source_detail, options_json,
-                        blend_inserted, source_batch_id, answer_from_mark_scheme)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'past_paper', ?, ?, 1, ?, ?)""",
+                        blend_inserted, source_batch_id, answer_from_mark_scheme,
+                        ko_grounding_reasoning, ko_crop_filename)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'past_paper', ?, ?, 1, ?, ?, ?, ?)""",
                     (batch_id, user_id, subject_id,
                      ko_q["category_id"], ko_q["subcategory_id"],
                      ko_q["page_number"], pp_q["question_text"], pp_q["answer_text"],
                      pp_q["question_type"], pp_q["difficulty"],
                      ko_q["approved"], source_detail, pp_q["options_json"],
-                     pp_q["source_batch_id"], pp_q["answer_from_mark_scheme"]),
+                     pp_q["source_batch_id"], pp_q["answer_from_mark_scheme"],
+                     g_reason, g_crop),
                 )
                 inserted += 1
             kept += 1
 
+    # Record grounding spend as its own api_usage row + batch cost increment.
+    if grounding_usage["input_tokens"] or grounding_usage["output_tokens"]:
+        db.execute(
+            """INSERT INTO api_usage
+               (user_id, batch_id, call_type, input_tokens, output_tokens, cost_usd, model)
+               VALUES (?, ?, 'ko_grounding', ?, ?, ?, ?)""",
+            (user_id, batch_id, grounding_usage["input_tokens"],
+             grounding_usage["output_tokens"], grounding_usage["cost_usd"],
+             grounding_usage.get("model")),
+        )
+        db.execute(
+            "UPDATE upload_batches SET cost_usd = cost_usd + ? WHERE id = ?",
+            (grounding_usage["cost_usd"], batch_id),
+        )
+
     db.commit()
+    total_cost = match_usage["cost_usd"] + grounding_usage["cost_usd"]
     logger.info(
         "blend[batch=%s]: replaced %d KO question(s) in place, inserted %d extra "
-        "past-paper question(s); %d total matches applied (cost $%.4f)",
-        batch_id, replaced, inserted, len(matches), match_usage["cost_usd"],
+        "past-paper question(s); grounding dropped %d candidate(s); %d total matches "
+        "returned (cost $%.4f incl. grounding $%.4f)",
+        batch_id, replaced, inserted, grounding_dropped, len(matches),
+        total_cost, grounding_usage["cost_usd"],
     )
-    return {"replaced": replaced, "inserted": inserted, "cost_usd": match_usage["cost_usd"]}
+    return {"replaced": replaced, "inserted": inserted, "cost_usd": total_cost}
 
 
 def _restore_blend(batch_id: int, db: sqlite3.Connection) -> dict:
@@ -346,6 +419,8 @@ def _restore_blend(batch_id: int, db: sqlite3.Connection) -> dict:
                question_source_detail = NULL,
                source_batch_id = NULL,
                answer_from_mark_scheme = 0,
+               ko_grounding_reasoning = NULL,
+               ko_crop_filename = NULL,
                blend_origin_text = NULL,
                blend_origin_answer = NULL,
                blend_origin_options = NULL,

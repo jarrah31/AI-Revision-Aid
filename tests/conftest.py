@@ -53,6 +53,7 @@ def mock_claude_services(monkeypatch):
     import backend.routers.questions as q_router
     import backend.routers.quiz as quiz_router
     import backend.routers.admin as admin_router
+    import backend.routers.upload as upload_router
 
     # Background MCQ generation called after question approval
     monkeypatch.setattr(q_router, "ensure_mcq_options_bg", lambda *a, **kw: None)
@@ -76,6 +77,16 @@ def mock_claude_services(monkeypatch):
 
     # API key validation called when saving the anthropic_api_key setting
     monkeypatch.setattr(admin_router, "validate_api_key", lambda key: (True, "API key is valid"))
+
+    # Blend grounding: default to "keep every match, no crop" (the real service's
+    # non-fatal fallback). Grounding-specific tests override this via _patch_blend.
+    def _fake_ground(ko_point, ko_page_png, candidates):
+        return (
+            [{"past_paper_question_id": c["id"], "supported": True,
+              "reasoning": "", "bbox_pct": None, "snippet": ""} for c in candidates],
+            {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "model": None},
+        )
+    monkeypatch.setattr(upload_router, "ground_matches_to_ko", _fake_ground)
 
 
 # ── HTTP client ───────────────────────────────────────────────────────────────

@@ -1090,3 +1090,136 @@ def test_questions_table_has_ko_grounding_columns(db_conn):
     cols = {row[1] for row in db_conn.execute("PRAGMA table_info(questions)").fetchall()}
     assert "ko_grounding_reasoning" in cols
     assert "ko_crop_filename" in cols
+
+
+def _insert_q(db, batch_id, user_id, subject_id, source, text="q", answer="a", page=1):
+    cur = db.execute(
+        """INSERT INTO questions (batch_id, user_id, subject_id, page_number,
+           question_text, answer_text, question_source)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (batch_id, user_id, subject_id, page, text, answer, source))
+    db.commit()
+    return cur.lastrowid
+
+
+def _patch_blend(monkeypatch, matches, ground_fn):
+    """Stub the matcher + grounding so the blend runs purely on fixture data.
+    ground_fn(ko_point, png, candidates) -> list[result dict]."""
+    monkeypatch.setattr(upload, "match_ko_to_past_papers",
+                        lambda ko, pp: (matches, dict(_MATCH_USAGE)))
+    monkeypatch.setattr(upload, "ground_matches_to_ko",
+                        lambda ko, png, cands: (ground_fn(ko, png, cands), dict(_MATCH_USAGE)))
+    monkeypatch.setattr(upload, "_load_ko_page_png", lambda batch_id, page: b"fake-png")
+    monkeypatch.setattr(upload, "save_ko_crop",
+                        lambda **kw: f"batch_{kw['batch_id']}/page_{kw['page_number']}"
+                                     f"_kocrop_{kw['ko_id']}_{kw['pp_id']}.png")
+
+
+def test_grounding_drops_unsupported_match(
+    isolated_db, db_conn, regular_user, make_subject, make_batch, monkeypatch
+):
+    """A candidate the grounding step marks unsupported is NOT written into the blend."""
+    monkeypatch.setattr(upload, "DB_PATH", isolated_db)
+    uid, _ = regular_user
+    sid = make_subject()
+    ko_batch = make_batch(uid, sid)
+    pp_batch = make_batch(uid, sid)
+    _set_past_paper(db_conn, pp_batch)
+    ko_q = _insert_q(db_conn, ko_batch, uid, sid, "ai_generated", "What is an organ?")
+    pp_q = _insert_q(db_conn, pp_batch, uid, sid, "past_paper", "Name a group of tissues")
+
+    _patch_blend(monkeypatch,
+                 [{"ko_question_id": ko_q, "past_paper_question_id": pp_q}],
+                 lambda ko, png, cands: [
+                     {"past_paper_question_id": c["id"], "supported": False,
+                      "reasoning": "no", "bbox_pct": None, "snippet": ""} for c in cands])
+
+    upload._match_and_replace_with_past_papers(ko_batch, uid, sid, db_conn)
+
+    row = db_conn.execute("SELECT question_source, ko_grounding_reasoning FROM questions "
+                          "WHERE id = ?", (ko_q,)).fetchone()
+    assert row[0] == "ai_generated"   # stayed an AI question; nothing replaced
+    assert row[1] is None
+
+
+def test_grounding_persists_reasoning_and_crop(
+    isolated_db, db_conn, regular_user, make_subject, make_batch, monkeypatch
+):
+    monkeypatch.setattr(upload, "DB_PATH", isolated_db)
+    uid, _ = regular_user
+    sid = make_subject()
+    ko_batch = make_batch(uid, sid)
+    pp_batch = make_batch(uid, sid)
+    _set_past_paper(db_conn, pp_batch)
+    ko_q = _insert_q(db_conn, ko_batch, uid, sid, "ai_generated", "What is an organ?")
+    pp_q = _insert_q(db_conn, pp_batch, uid, sid, "past_paper", "Name a group of tissues")
+
+    _patch_blend(monkeypatch,
+                 [{"ko_question_id": ko_q, "past_paper_question_id": pp_q}],
+                 lambda ko, png, cands: [
+                     {"past_paper_question_id": c["id"], "supported": True,
+                      "reasoning": "Defined in the Levels of Organisation box.",
+                      "bbox_pct": {"x": 5, "y": 10, "w": 40, "h": 12},
+                      "snippet": "Organ: tissues"} for c in cands])
+
+    upload._match_and_replace_with_past_papers(ko_batch, uid, sid, db_conn)
+
+    row = db_conn.execute(
+        "SELECT question_source, ko_grounding_reasoning, ko_crop_filename "
+        "FROM questions WHERE id = ?", (ko_q,)).fetchone()
+    assert row[0] == "past_paper"
+    assert row[1] == "Defined in the Levels of Organisation box."
+    assert row[2] == f"batch_{ko_batch}/page_1_kocrop_{ko_q}_{pp_q}.png"
+
+
+def test_grounding_invalid_bbox_stores_reasoning_without_crop(
+    isolated_db, db_conn, regular_user, make_subject, make_batch, monkeypatch
+):
+    monkeypatch.setattr(upload, "DB_PATH", isolated_db)
+    uid, _ = regular_user
+    sid = make_subject()
+    ko_batch = make_batch(uid, sid)
+    pp_batch = make_batch(uid, sid)
+    _set_past_paper(db_conn, pp_batch)
+    ko_q = _insert_q(db_conn, ko_batch, uid, sid, "ai_generated")
+    pp_q = _insert_q(db_conn, pp_batch, uid, sid, "past_paper")
+
+    _patch_blend(monkeypatch,
+                 [{"ko_question_id": ko_q, "past_paper_question_id": pp_q}],
+                 lambda ko, png, cands: [
+                     {"past_paper_question_id": c["id"], "supported": True,
+                      "reasoning": "supported but unlocated", "bbox_pct": None,
+                      "snippet": ""} for c in cands])
+
+    upload._match_and_replace_with_past_papers(ko_batch, uid, sid, db_conn)
+    row = db_conn.execute("SELECT ko_grounding_reasoning, ko_crop_filename FROM questions "
+                          "WHERE id = ?", (ko_q,)).fetchone()
+    assert row[0] == "supported but unlocated"
+    assert row[1] is None
+
+
+def test_restore_blend_clears_grounding(
+    isolated_db, db_conn, regular_user, make_subject, make_batch, monkeypatch
+):
+    monkeypatch.setattr(upload, "DB_PATH", isolated_db)
+    uid, _ = regular_user
+    sid = make_subject()
+    ko_batch = make_batch(uid, sid)
+    pp_batch = make_batch(uid, sid)
+    _set_past_paper(db_conn, pp_batch)
+    ko_q = _insert_q(db_conn, ko_batch, uid, sid, "ai_generated", "What is an organ?")
+    pp_q = _insert_q(db_conn, pp_batch, uid, sid, "past_paper", "Name a group of tissues")
+
+    _patch_blend(monkeypatch,
+                 [{"ko_question_id": ko_q, "past_paper_question_id": pp_q}],
+                 lambda ko, png, cands: [
+                     {"past_paper_question_id": c["id"], "supported": True, "reasoning": "r",
+                      "bbox_pct": {"x": 1, "y": 1, "w": 10, "h": 10}, "snippet": "s"}
+                     for c in cands])
+    upload._match_and_replace_with_past_papers(ko_batch, uid, sid, db_conn)
+
+    upload._restore_blend(ko_batch, db_conn)
+    row = db_conn.execute("SELECT question_source, ko_grounding_reasoning, ko_crop_filename "
+                          "FROM questions WHERE id = ?", (ko_q,)).fetchone()
+    assert row[0] == "ai_generated"
+    assert row[1] is None and row[2] is None
