@@ -88,6 +88,54 @@ def crop_section_to_bytes(
     return buf.getvalue()
 
 
+def downscale_png(png_bytes: bytes, max_px: int = 1100) -> bytes:
+    """Return PNG bytes scaled so the longest side is at most max_px.
+
+    Cheaper vision input and good enough for a coarse bounding box. Images already
+    within bounds are returned unchanged.
+    """
+    img = Image.open(io.BytesIO(png_bytes))
+    longest = max(img.size)
+    if longest <= max_px:
+        return png_bytes
+    scale = max_px / longest
+    new_size = (round(img.size[0] * scale), round(img.size[1] * scale))
+    resized = img.resize(new_size, Image.LANCZOS)
+    buf = io.BytesIO()
+    resized.save(buf, "PNG", optimize=True)
+    return buf.getvalue()
+
+
+def save_ko_crop(
+    batch_id: int,
+    page_number: int,
+    ko_id: int,
+    pp_id: int,
+    png_bytes: bytes,
+    bbox_pct: dict,
+    padding_pct: float = 6.0,
+) -> str:
+    """Crop the KO region that grounds a blended match and save it under a name
+    keyed by the KO and past-paper question ids. Returns the relative filename
+    (served by the /images mount). bbox_pct keys: x, y, w, h (percent of page).
+    """
+    img = Image.open(io.BytesIO(png_bytes))
+    w, h = img.size
+    x1 = max(0, int((bbox_pct["x"] - padding_pct) / 100 * w))
+    y1 = max(0, int((bbox_pct["y"] - padding_pct) / 100 * h))
+    x2 = min(w, int((bbox_pct["x"] + bbox_pct["w"] + padding_pct) / 100 * w))
+    y2 = min(h, int((bbox_pct["y"] + bbox_pct["h"] + padding_pct) / 100 * h))
+    if x2 <= x1 or y2 <= y1:          # degenerate box → fall back to full page
+        x1, y1, x2, y2 = 0, 0, w, h
+    cropped = img.crop((x1, y1, x2, y2))
+
+    batch_dir = DATA_DIR / "images" / f"batch_{batch_id}"
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"page_{page_number}_kocrop_{ko_id}_{pp_id}.png"
+    cropped.save(batch_dir / filename, "PNG", optimize=True)
+    return f"batch_{batch_id}/{filename}"
+
+
 def png_to_base64(png_bytes: bytes) -> str:
     """Encode PNG bytes to base64 string for Claude API."""
     return base64.standard_b64encode(png_bytes).decode("utf-8")
