@@ -863,7 +863,14 @@
             <!-- Question -->
             <p class="text-lg font-medium text-gray-800 mb-4" x-text="currentQuestion?.question_text"></p>
 
-            <!-- Question image intentionally hidden: source screenshots contain the answer -->
+            <!-- Referenced figure/table the question depends on (e.g. "Use Table 3").
+                 This is a cropped figure, not the full page, so it's safe to show up-front. -->
+            <div x-show="currentQuestion?.image_filename" class="mb-4">
+                <img :src="'/images/' + currentQuestion?.image_filename"
+                     @click="lightboxSrc = '/images/' + currentQuestion?.image_filename"
+                     class="max-h-72 w-auto rounded-lg border border-gray-200 shadow-sm cursor-zoom-in"
+                     alt="Figure referenced by this question">
+            </div>
 
             <!-- FLASHCARD FORMAT -->
             <div x-show="currentFormat === 'flashcard'">

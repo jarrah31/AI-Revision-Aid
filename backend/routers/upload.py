@@ -191,7 +191,7 @@ def _match_and_replace_with_past_papers(
     past_paper_qs = db.execute(
         """SELECT q.id, q.question_text, q.answer_text, q.options_json,
                   q.question_type, q.difficulty, q.answer_from_mark_scheme,
-                  q.batch_id AS source_batch_id,
+                  q.image_id, q.batch_id AS source_batch_id,
                   b.exam_board, b.exam_year, b.paper_number
            FROM questions q
            JOIN upload_batches b ON b.id = q.batch_id
@@ -341,11 +341,14 @@ def _match_and_replace_with_past_papers(
                            answer_from_mark_scheme = ?,
                            ko_grounding_reasoning = ?,
                            ko_crop_filename = ?,
+                           blend_origin_image_id = image_id,
+                           image_id = ?,
                            updated_at = datetime('now')
                        WHERE id = ?""",
                     (pp_q["question_text"], pp_q["answer_text"], source_detail,
                      pp_q["options_json"], pp_q["source_batch_id"],
-                     pp_q["answer_from_mark_scheme"], g_reason, g_crop, ko_q_id),
+                     pp_q["answer_from_mark_scheme"], g_reason, g_crop,
+                     pp_q["image_id"], ko_q_id),
                 )
                 replaced += 1
             else:
@@ -355,15 +358,15 @@ def _match_and_replace_with_past_papers(
                         page_number, question_text, answer_text, question_type, difficulty,
                         approved, question_source, question_source_detail, options_json,
                         blend_inserted, source_batch_id, answer_from_mark_scheme,
-                        ko_grounding_reasoning, ko_crop_filename)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'past_paper', ?, ?, 1, ?, ?, ?, ?)""",
+                        ko_grounding_reasoning, ko_crop_filename, image_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'past_paper', ?, ?, 1, ?, ?, ?, ?, ?)""",
                     (batch_id, user_id, subject_id,
                      ko_q["category_id"], ko_q["subcategory_id"],
                      ko_q["page_number"], pp_q["question_text"], pp_q["answer_text"],
                      pp_q["question_type"], pp_q["difficulty"],
                      ko_q["approved"], source_detail, pp_q["options_json"],
                      pp_q["source_batch_id"], pp_q["answer_from_mark_scheme"],
-                     g_reason, g_crop),
+                     g_reason, g_crop, pp_q["image_id"]),
                 )
                 inserted += 1
             kept += 1
@@ -421,6 +424,8 @@ def _restore_blend(batch_id: int, db: sqlite3.Connection) -> dict:
                answer_from_mark_scheme = 0,
                ko_grounding_reasoning = NULL,
                ko_crop_filename = NULL,
+               image_id = blend_origin_image_id,
+               blend_origin_image_id = NULL,
                blend_origin_text = NULL,
                blend_origin_answer = NULL,
                blend_origin_options = NULL,

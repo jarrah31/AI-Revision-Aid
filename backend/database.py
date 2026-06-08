@@ -349,6 +349,9 @@ def init_db():
         "ALTER TABLE questions ADD COLUMN blend_origin_text TEXT DEFAULT NULL",
         "ALTER TABLE questions ADD COLUMN blend_origin_answer TEXT DEFAULT NULL",
         "ALTER TABLE questions ADD COLUMN blend_origin_options TEXT DEFAULT NULL",
+        # Preserve the in-place row's original figure link so a blend (which
+        # overwrites image_id with the matched past-paper figure) can be reversed.
+        "ALTER TABLE questions ADD COLUMN blend_origin_image_id INTEGER DEFAULT NULL",
         "ALTER TABLE questions ADD COLUMN blend_inserted INTEGER NOT NULL DEFAULT 0",
         # For blended questions, the original past-paper upload they were matched
         # from (their own batch_id points at the KO booklet). Lets the quiz show

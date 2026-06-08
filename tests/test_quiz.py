@@ -29,6 +29,30 @@ def test_start_quiz_with_new_cards(
     assert len(data["questions"]) == 1
 
 
+def test_start_quiz_includes_referenced_figure(
+    client, user_headers, regular_user, make_subject, make_batch, make_question, db_conn
+):
+    """A question that references a figure must expose image_filename to the client
+    so the quiz can render the figure (e.g. "Use Table 3")."""
+    uid, _ = regular_user
+    sid = make_subject()
+    bid = make_batch(uid, sid)
+    qid = make_question(bid, uid, sid, question_source="past_paper")
+    img_id = db_conn.execute(
+        """INSERT INTO images (batch_id, page_number, filename, description,
+           crop_x, crop_y, crop_w, crop_h, width, height)
+           VALUES (?, 1, 'batch_x/table3.png', 'Table 3', 0, 0, 50, 50, 100, 100)""",
+        (bid,),
+    ).lastrowid
+    db_conn.execute("UPDATE questions SET image_id = ? WHERE id = ?", (img_id, qid))
+    db_conn.commit()
+
+    r = client.post("/api/quiz/start", json={}, headers=user_headers)
+    assert r.status_code == 200
+    q = r.json()["questions"][0]
+    assert q["image_filename"] == "batch_x/table3.png"
+
+
 def test_start_quiz_with_overdue_srs_cards(
     client, user_headers, regular_user, make_subject, make_batch, make_question, make_srs_card
 ):

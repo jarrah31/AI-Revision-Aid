@@ -743,6 +743,83 @@ def test_restore_blend_clears_mark_scheme_flag(
     ).fetchone()["answer_from_mark_scheme"] == 0   # cleared on restore
 
 
+def _attach_figure(db_conn, question_id, batch_id, filename="batch_x/fig.png"):
+    """Create an images row and link it to a question via image_id. Returns image id."""
+    img_id = db_conn.execute(
+        """INSERT INTO images (batch_id, page_number, filename, description,
+           crop_x, crop_y, crop_w, crop_h, width, height)
+           VALUES (?, 1, ?, 'Table 3', 0, 0, 50, 50, 100, 100)""",
+        (batch_id, filename),
+    ).lastrowid
+    db_conn.execute("UPDATE questions SET image_id = ? WHERE id = ?", (img_id, question_id))
+    db_conn.commit()
+    return img_id
+
+
+def test_blend_carries_figure_image_id(
+    isolated_db, db_conn, regular_user, make_subject, make_batch, monkeypatch
+):
+    """A matched past-paper question that references a figure must carry its
+    image_id onto the blended KO row — both the replaced row and inserted rows —
+    so the quiz can render the figure the question depends on."""
+    monkeypatch.setattr(upload, "DB_PATH", isolated_db)
+    user_id, _ = regular_user
+    sid = make_subject()
+    ko_batch = make_batch(user_id, sid)
+    ko_q = _make_ko_question(db_conn, ko_batch, user_id, sid)
+    pp_ids = _make_pp_batch_with_questions(db_conn, user_id, sid, ["exam X", "exam Y"])
+    pp_batch = db_conn.execute(
+        "SELECT batch_id FROM questions WHERE id = ?", (pp_ids[0],)
+    ).fetchone()["batch_id"]
+    img0 = _attach_figure(db_conn, pp_ids[0], pp_batch, "batch_x/fig0.png")
+    img1 = _attach_figure(db_conn, pp_ids[1], pp_batch, "batch_x/fig1.png")
+
+    monkeypatch.setattr(upload, "match_ko_to_past_papers",
+        lambda k, p: ([{"ko_question_id": ko_q, "past_paper_question_id": pid} for pid in pp_ids], _MATCH_USAGE))
+    upload._match_and_replace_with_past_papers(ko_batch, user_id, sid, db_conn)
+
+    # Replaced row (in place) carries the first figure's image_id.
+    replaced = db_conn.execute(
+        "SELECT image_id FROM questions WHERE id = ?", (ko_q,)
+    ).fetchone()
+    assert replaced["image_id"] == img0
+    # Inserted row carries the second figure's image_id.
+    inserted = db_conn.execute(
+        "SELECT image_id FROM questions WHERE batch_id = ? AND blend_inserted = 1", (ko_batch,)
+    ).fetchone()
+    assert inserted["image_id"] == img1
+
+
+def test_restore_blend_restores_original_figure_image_id(
+    isolated_db, db_conn, regular_user, make_subject, make_batch, monkeypatch
+):
+    """If a KO question already had its own figure, blending overwrites image_id
+    with the exam figure; restoring must put the original KO figure back."""
+    monkeypatch.setattr(upload, "DB_PATH", isolated_db)
+    user_id, _ = regular_user
+    sid = make_subject()
+    ko_batch = make_batch(user_id, sid)
+    ko_q = _make_ko_question(db_conn, ko_batch, user_id, sid)
+    ko_fig = _attach_figure(db_conn, ko_q, ko_batch, "batch_ko/diagram.png")
+    pp_ids = _make_pp_batch_with_questions(db_conn, user_id, sid, ["exam X"])
+    pp_batch = db_conn.execute(
+        "SELECT batch_id FROM questions WHERE id = ?", (pp_ids[0],)
+    ).fetchone()["batch_id"]
+    pp_fig = _attach_figure(db_conn, pp_ids[0], pp_batch, "batch_x/fig0.png")
+
+    monkeypatch.setattr(upload, "match_ko_to_past_papers",
+        lambda k, p: ([{"ko_question_id": ko_q, "past_paper_question_id": pp_ids[0]}], _MATCH_USAGE))
+    upload._match_and_replace_with_past_papers(ko_batch, user_id, sid, db_conn)
+    assert db_conn.execute(
+        "SELECT image_id FROM questions WHERE id = ?", (ko_q,)
+    ).fetchone()["image_id"] == pp_fig     # overwritten by the exam figure
+
+    upload._restore_blend(ko_batch, db_conn)
+    assert db_conn.execute(
+        "SELECT image_id FROM questions WHERE id = ?", (ko_q,)
+    ).fetchone()["image_id"] == ko_fig     # original KO figure restored
+
+
 def test_blend_records_source_batch_id(
     isolated_db, db_conn, regular_user, make_subject, make_batch, monkeypatch
 ):
