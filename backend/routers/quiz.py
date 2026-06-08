@@ -1,5 +1,6 @@
 import sqlite3
 import json
+import logging
 import random
 from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -12,6 +13,7 @@ from backend.services.claude_service import judge_typed_answer
 from backend.services.mcq_service import ensure_mcq_options
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _prepare_questions_for_client(questions: list[dict]) -> list[dict]:
@@ -213,7 +215,40 @@ def get_question_count(
         params.extend(src_params)
     where = " AND ".join(conditions)
     row = db.execute(f"SELECT COUNT(*) FROM questions q WHERE {where}", params).fetchone()
-    return {"count": row[0]}
+    count = row[0]
+
+    # Diagnose an empty selection so "None available" isn't a silent dead end.
+    # Re-run the source filter WITHOUT the category/approval narrowing: this tells
+    # us whether matching questions exist at all, how many are approved, and which
+    # categories they sit under — pinpointing the usual culprits (an unapproved
+    # booklet, or a category mismatch). Fires only on count == 0 with a source
+    # filter active, so it costs nothing on the common path.
+    if count == 0 and src_filter:
+        diag_conditions = ["q.user_id = ?", "q.approved IN (0, 1)"]
+        diag_params: list = [user["id"]]
+        if subject_id:
+            diag_conditions.append("q.subject_id = ?")
+            diag_params.append(subject_id)
+        diag_conditions.append(src_filter)
+        diag_params.extend(src_params)
+        diag_where = " AND ".join(diag_conditions)
+        d = db.execute(
+            f"""SELECT COUNT(*) AS total,
+                       SUM(CASE WHEN q.approved = 1 THEN 1 ELSE 0 END) AS approved,
+                       GROUP_CONCAT(DISTINCT q.category_id) AS category_ids
+                FROM questions q WHERE {diag_where}""",
+            diag_params,
+        ).fetchone()
+        logger.info(
+            "quiz/count: 0 results for sources=%s blended_mode=%s subject_id=%s "
+            "category_ids=%s. Ignoring category+approval, matching rows: total=%s "
+            "approved=%s under categories=[%s]. (total=0 → no such questions; "
+            "approved<total → some/all unapproved — approve the booklet; selected "
+            "category not in the list → category mismatch.)",
+            question_sources, blended_mode, subject_id, category_ids,
+            d["total"] or 0, d["approved"] or 0, d["category_ids"] or "",
+        )
+    return {"count": count}
 
 
 @router.get("/sources")

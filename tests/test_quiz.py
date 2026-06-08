@@ -565,6 +565,49 @@ def test_blended_mode_exam_only(
     assert texts == {"blended exam"}
 
 
+def test_count_blended_zero_logs_diagnostic(
+    client, user_headers, regular_user, make_subject, make_batch, make_question, db_conn, caplog
+):
+    """When a blended selection returns 0, a diagnostic must log WHY — e.g. the
+    booklet's questions are unapproved (excluded by approved=1) — so remote logs
+    can pinpoint the cause instead of silently returning 'None available'."""
+    import logging
+    uid, _ = regular_user
+    sid = make_subject()
+    # A blended booklet (KO batch with a past_paper row) whose questions are all
+    # UNAPPROVED → invisible to every quiz query, including blended.
+    ko = make_batch(uid, sid, filename="unapproved.pdf")
+    make_question(ko, uid, sid, question_source="ai_generated", approved=0)
+    make_question(ko, uid, sid, question_source="past_paper", approved=0)
+
+    with caplog.at_level(logging.INFO, logger="backend.routers.quiz"):
+        r = client.get(f"/api/quiz/count?subject_id={sid}&question_sources=blended",
+                       headers=user_headers)
+    assert r.status_code == 200
+    assert r.json()["count"] == 0
+    diag = [rec.getMessage() for rec in caplog.records
+            if rec.name == "backend.routers.quiz"]
+    assert any("0 results" in m for m in diag), diag
+    # The diagnostic surfaces that matching rows exist but are unapproved.
+    assert any("total=2" in m and "approved=0" in m for m in diag), diag
+
+
+def test_count_blended_nonzero_no_diagnostic(
+    client, user_headers, regular_user, make_subject, make_batch, make_question, db_conn, caplog
+):
+    """The diagnostic only fires on an empty result — a healthy blended count is silent."""
+    import logging
+    uid, _ = regular_user
+    sid = make_subject()
+    _blend_fixture(db_conn, uid, sid, make_batch, make_question)
+    with caplog.at_level(logging.INFO, logger="backend.routers.quiz"):
+        r = client.get(f"/api/quiz/count?subject_id={sid}&question_sources=blended",
+                       headers=user_headers)
+    assert r.status_code == 200
+    assert r.json()["count"] == 3
+    assert not [rec for rec in caplog.records if rec.name == "backend.routers.quiz"]
+
+
 def test_blended_excludes_unblended_ko_batches(
     client, user_headers, regular_user, make_subject, make_batch, make_question, db_conn
 ):
