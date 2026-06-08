@@ -13,6 +13,7 @@
     selectedModes: [],       // [] = all modes (flashcard + mcq + typed)
     availableCount: null,
     sources: [],             // provenance: uploads contributing to the current selection
+    selectedBatchIds: [],    // [] = all uploads; otherwise restrict the quiz to these batch ids
     showSources: false,      // provenance panel expanded?
     loadingSetup: true,
     startingQuiz: false,
@@ -61,6 +62,7 @@
         this.$watch('selectedSubcategoryIds', () => { this.loadAvailableCount(); this.loadSources(); });
         this.$watch('questionSources',      () => this.loadAvailableCount());
         this.$watch('blendedMode',          () => this.loadAvailableCount());
+        this.$watch('selectedBatchIds',     () => this.loadAvailableCount());
         this.$watch('questionSources', () => {
             // MCQ distractors only exist for AI-generated KO questions; drop the
             // mode when the selection has no KO source (past-paper / blended only).
@@ -167,7 +169,18 @@
             try {
                 this.sources = await API.get('/quiz/sources?' + params.toString());
             } catch (e) { this.sources = []; }
+            // Drop any selected upload that's no longer in the list (e.g. after a
+            // category change) so it can't keep filtering invisibly.
+            this.selectedBatchIds = this.selectedBatchIds.filter(
+                id => this.sources.some(s => s.batch_id === id));
         }, 200);
+    },
+
+    toggleBatch(id) {
+        const i = this.selectedBatchIds.indexOf(id);
+        if (i === -1) this.selectedBatchIds = [...this.selectedBatchIds, id];
+        else this.selectedBatchIds = this.selectedBatchIds.filter(b => b !== id);
+        if (this.selectedBatchIds.length > 0) this.showSources = true;
     },
 
     async selectSubject(id) {
@@ -220,6 +233,7 @@
             this.selectedCategoryIds.forEach(id => params.append('category_ids', id));
             this.selectedSubcategoryIds.forEach(id => params.append('subcategory_ids', id));
             this.questionSources.forEach(s => params.append('question_sources', s));
+            this.selectedBatchIds.forEach(id => params.append('batch_ids', id));
             if (this.blendedSelected()) params.set('blended_mode', this.blendedMode);
             try {
                 const res = await API.get('/quiz/count?' + params.toString());
@@ -344,6 +358,7 @@
                 category_ids: this.selectedCategoryIds.length > 0 ? this.selectedCategoryIds : null,
                 subcategory_ids: this.selectedSubcategoryIds.length > 0 ? this.selectedSubcategoryIds : null,
                 question_sources: this.questionSources.length > 0 ? this.questionSources : null,
+                batch_ids: this.selectedBatchIds.length > 0 ? this.selectedBatchIds : null,
                 blended_mode: this.blendedMode,
                 count: this.count,
                 modes: this.selectedModes.length > 0 ? this.selectedModes : null,
@@ -629,18 +644,24 @@
                             class="flex items-center gap-1 text-sm font-medium text-gray-700">
                         <span x-text="showSources ? '▾' : '▸'"></span>
                         Questions come from
-                        <span class="text-gray-400 font-normal" x-text="'(' + sources.length + ' upload' + (sources.length !== 1 ? 's' : '') + ')'"></span>
+                        <span class="text-gray-400 font-normal"
+                              x-text="'(' + sources.length + ' upload' + (sources.length !== 1 ? 's' : '') + (selectedBatchIds.length ? ' · ' + selectedBatchIds.length + ' selected' : '') + ')'"></span>
                     </button>
+                    <p x-show="showSources" class="text-xs text-gray-400 mt-1 mb-1">Tap an upload to limit the quiz to it (none selected = all).</p>
                     <div x-show="showSources"
-                         class="mt-2 border border-gray-100 rounded-lg divide-y divide-gray-50 max-h-48 overflow-y-auto">
+                         class="mt-1 border border-gray-100 rounded-lg divide-y divide-gray-50 max-h-48 overflow-y-auto">
                         <template x-for="s in sources" :key="s.batch_id">
-                            <div class="flex items-center justify-between gap-3 px-3 py-1.5 text-xs">
-                                <span class="min-w-0 flex items-center gap-1.5">
-                                    <span x-text="sourceIcon(s)"></span>
-                                    <span class="font-mono text-gray-600 truncate" :title="s.filename" x-text="s.filename"></span>
+                            <button type="button" @click="toggleBatch(s.batch_id)"
+                                    class="w-full flex items-center justify-between gap-3 px-3 py-1.5 text-xs text-left transition"
+                                    :class="selectedBatchIds.includes(s.batch_id) ? 'bg-indigo-50' : 'hover:bg-gray-50'">
+                                <span class="min-w-0 flex items-start gap-1.5">
+                                    <span x-text="selectedBatchIds.includes(s.batch_id) ? '✓' : sourceIcon(s)"
+                                          :class="selectedBatchIds.includes(s.batch_id) ? 'text-indigo-600 font-bold' : ''"></span>
+                                    <span class="font-mono break-words" :title="s.filename" x-text="s.filename"
+                                          :class="selectedBatchIds.includes(s.batch_id) ? 'text-indigo-700 font-medium' : 'text-gray-600'"></span>
                                 </span>
                                 <span class="text-gray-400 whitespace-nowrap" x-text="sourceCountLabel(s)"></span>
-                            </div>
+                            </button>
                         </template>
                     </div>
                 </div>
