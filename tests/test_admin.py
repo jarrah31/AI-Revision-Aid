@@ -280,3 +280,12 @@ def test_update_setting_empty_value_returns_400(client, admin_headers):
         headers=admin_headers,
     )
     assert r.status_code == 400
+
+
+def test_ai_settings_include_grounding(client, admin_headers):
+    """The grounding model + prompt are exposed in AI Settings."""
+    r = client.get("/api/admin/ai-settings", headers=admin_headers)
+    assert r.status_code == 200
+    keys = {item["key"] for item in r.json()["settings"]}
+    assert "ai_model_grounding" in keys
+    assert "ai_prompt_grounding" in keys
