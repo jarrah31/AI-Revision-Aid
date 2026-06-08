@@ -150,6 +150,18 @@ def _source_filter(sources: list[str] | None, blended_mode: str = "mixed"):
     return "(" + " OR ".join(clauses) + ")", []
 
 
+def _batch_filter(batch_ids: list[int] | None):
+    """Return (sql_fragment, params) restricting to specific upload batches.
+
+    Empty/None → (None, []) (no filter — all uploads). Mirrors _cat_subcat_filter:
+    a plain AND on q.batch_id, composable with the subject/category/source filters.
+    """
+    if not batch_ids:
+        return None, []
+    ph = ",".join("?" * len(batch_ids))
+    return f"q.batch_id IN ({ph})", list(batch_ids)
+
+
 def _attach_source_meta(questions: list[dict], db: sqlite3.Connection) -> None:
     """Attach a `provenance` dict to each question for the in-quiz pills.
 
@@ -200,6 +212,7 @@ def get_question_count(
     subject_id: int | None = Query(None),
     category_ids: list[int] | None = Query(None),
     subcategory_ids: list[int] | None = Query(None),
+    batch_ids: list[int] | None = Query(None),
     question_sources: list[str] | None = Query(None),
     blended_mode: str = Query("mixed"),
     user: dict = Depends(get_current_user),
@@ -219,6 +232,10 @@ def get_question_count(
     if src_filter:
         conditions.append(src_filter)
         params.extend(src_params)
+    batch_f, batch_p = _batch_filter(batch_ids)
+    if batch_f:
+        conditions.append(batch_f)
+        params.extend(batch_p)
     where = " AND ".join(conditions)
     row = db.execute(f"SELECT COUNT(*) FROM questions q WHERE {where}", params).fetchone()
     count = row[0]

@@ -794,3 +794,40 @@ def test_provenance_includes_ko_grounding(
     q = next(x for x in r.json()["questions"] if x["id"] == qid)
     assert q["provenance"]["ko_reasoning"] == "Organ is defined here."
     assert q["provenance"]["ko_crop_url"] == "/images/batch_1/page_1_kocrop_1_2.png"
+
+
+# ── Batch-id filter (quiz count scoped to specific uploads) ───────────────────
+
+def test_batch_filter_helper():
+    from backend.routers.quiz import _batch_filter
+    assert _batch_filter(None) == (None, [])
+    assert _batch_filter([]) == (None, [])
+    assert _batch_filter([5]) == ("q.batch_id IN (?)", [5])
+    assert _batch_filter([5, 9]) == ("q.batch_id IN (?,?)", [5, 9])
+
+
+def test_count_filters_by_batch(
+    client, user_headers, regular_user, make_subject, make_batch, make_question, db_conn
+):
+    uid, _ = regular_user
+    sid = make_subject()
+    ko, pp = _blend_fixture(db_conn, uid, sid, make_batch, make_question)
+
+    def count(*batch_ids, sources=()):
+        qs = "".join(f"&batch_ids={b}" for b in batch_ids)
+        qs += "".join(f"&question_sources={s}" for s in sources)
+        r = client.get(f"/api/quiz/count?subject_id={sid}{qs}", headers=user_headers)
+        assert r.status_code == 200
+        return r.json()["count"]
+
+    assert count() == 5                         # no batch filter = everything
+    assert count(ko) == 3                        # the KO booklet's 2 AI + 1 blended
+    assert count(pp) == 2                        # standalone past-paper batch only
+    assert count(ko, pp) == 5                    # union of both
+    # composes with the source filter: the KO booklet's matched exam question only
+    r = client.get(
+        f"/api/quiz/count?subject_id={sid}&batch_ids={ko}"
+        f"&question_sources=blended&blended_mode=exam_only",
+        headers=user_headers,
+    )
+    assert r.json()["count"] == 1
