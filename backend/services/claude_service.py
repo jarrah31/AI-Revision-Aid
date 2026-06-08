@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import re
 import anthropic
 
@@ -12,6 +13,7 @@ from backend.prompts.past_paper_extraction import PAST_PAPER_EXTRACTION_PROMPT
 from backend.prompts.paper_type_detection import PAPER_TYPE_DETECTION_PROMPT
 from backend.prompts.fact_check import FACT_CHECK_PROMPT
 from backend.prompts.matching import MATCHING_PROMPT
+from backend.prompts.grounding import GROUNDING_PROMPT
 from backend.prompts.handwritten_ocr import HANDWRITTEN_OCR_PROMPT
 from backend.prompts.handwritten_qa import HANDWRITTEN_QA_PROMPT
 from backend.prompts.multiple_response_detection import MULTIPLE_RESPONSE_DETECTION_PROMPT
@@ -31,6 +33,7 @@ EXTRACTION_MODEL       = "claude-sonnet-4-6"   # Vision — KO PDF page images
 PAST_PAPER_EXTRACTION_MODEL = "claude-haiku-4-5"   # Vision — past-paper QP/MS pages
 QUIZ_MODEL             = "claude-haiku-4-5"    # Text-only — MCQ, judging, matching
 FACT_CHECK_MODEL       = "claude-sonnet-4-6"   # Needs web-search tool
+GROUNDING_MODEL        = "claude-sonnet-4-6"   # Vision — verify a match against the KO page
 HANDWRITTEN_OCR_MODEL  = "claude-sonnet-4-6"   # Vision — handwritten image OCR
 HANDWRITTEN_QA_MODEL   = "claude-haiku-4-5"    # Text-only — Q&A from confirmed text
 MULTI_RESPONSE_MODEL   = "claude-haiku-4-5"    # Text-only — structuring tick-box questions
@@ -70,6 +73,7 @@ AI_SETTING_DEFAULTS: dict[str, str] = {
     "ai_model_judging":             QUIZ_MODEL,
     "ai_model_fact_check":          FACT_CHECK_MODEL,
     "ai_model_matching":            QUIZ_MODEL,
+    "ai_model_grounding":           GROUNDING_MODEL,
     # Prompts
     "ai_prompt_ko_extraction":      QA_EXTRACTION_PROMPT,
     "ai_prompt_past_paper_extraction": PAST_PAPER_EXTRACTION_PROMPT,
@@ -77,6 +81,7 @@ AI_SETTING_DEFAULTS: dict[str, str] = {
     "ai_prompt_judging":            ANSWER_JUDGING_PROMPT,
     "ai_prompt_fact_check":         FACT_CHECK_PROMPT,
     "ai_prompt_matching":           MATCHING_PROMPT,
+    "ai_prompt_grounding":          GROUNDING_PROMPT,
     # Handwritten notes
     "ai_model_handwritten_ocr":     HANDWRITTEN_OCR_MODEL,
     "ai_model_handwritten_qa":      HANDWRITTEN_QA_MODEL,
@@ -796,3 +801,112 @@ def fact_check_question(question: str, answer: str, subject: str) -> tuple[dict,
         "model":           model,
     }
     return result, usage
+
+
+def _valid_bbox(d) -> dict | None:
+    """Coerce a model-returned bbox into {x,y,w,h} floats, or None if implausible.
+
+    Localization is forgiving by design (small models are loose); we only reject
+    boxes we can't use: non-dict, missing keys, non-positive size, or out of the
+    0-100 percentage range.
+    """
+    if not isinstance(d, dict):
+        return None
+    try:
+        x, y, w, h = float(d["x"]), float(d["y"]), float(d["w"]), float(d["h"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not (math.isfinite(w) and math.isfinite(h)) or w <= 0 or h <= 0 \
+            or not (0 <= x <= 100 and 0 <= y <= 100):
+        return None
+    return {"x": x, "y": y, "w": w, "h": h}
+
+
+def ground_matches_to_ko(
+    ko_point: dict, ko_page_png: bytes | None, candidates: list[dict]
+) -> tuple[list[dict], dict]:
+    """Vision-verify each candidate exam question against the KO page image.
+
+    Returns (results, usage). Each result:
+      {"past_paper_question_id": int, "supported": bool, "reasoning": str,
+       "bbox_pct": {x,y,w,h}|None, "snippet": str}
+
+    Non-fatal philosophy: the quality gate only drops a match on an EXPLICIT
+    supported=false. An API/parse failure, an omitted candidate, or a missing
+    image keeps the match (supported, no crop) — an infra hiccup must never
+    silently empty a blend.
+    """
+    empty_usage = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "model": None}
+    if not candidates:
+        return [], empty_usage
+
+    from backend.services.pdf_processor import downscale_png, png_to_base64
+
+    model       = _get_ai_setting("ai_model_grounding")
+    prompt_tmpl = _get_ai_setting("ai_prompt_grounding")
+
+    payload = json.dumps({
+        "ko_point": {"ko_question": ko_point.get("question_text") or "",
+                     "ko_answer":   ko_point.get("answer_text") or ""},
+        "candidates": [{"id": c["id"],
+                        "question": c.get("question_text") or "",
+                        "answer":   c.get("answer_text") or ""} for c in candidates],
+    }, indent=2)
+    prompt = prompt_tmpl.format(payload=payload)
+
+    def _keep_all(reason: str = "") -> list[dict]:
+        return [{"past_paper_question_id": c["id"], "supported": True,
+                 "reasoning": reason, "bbox_pct": None, "snippet": ""} for c in candidates]
+
+    content: list[dict] = [{"type": "text", "text": prompt}]
+    if ko_page_png:
+        try:
+            img_data = png_to_base64(downscale_png(ko_page_png))
+        except Exception:
+            img_data = png_to_base64(ko_page_png)
+        content.insert(0, {"type": "image", "source": {
+            "type": "base64", "media_type": "image/png",
+            "data": img_data}})
+
+    client = get_client()
+    try:
+        message = client.messages.create(
+            model=model,
+            max_tokens=1500,  # small structured verdict for <=3 candidates; ample headroom
+            messages=[{"role": "user", "content": content}],
+        )
+    except Exception as e:
+        logger.warning("ground: API call failed (non-fatal, keeping %d match(es)): %s",
+                       len(candidates), e)
+        return _keep_all(), {**empty_usage, "model": model}
+
+    usage = _calc_usage(message, model)
+    try:
+        if message.stop_reason == "max_tokens":
+            raise ValueError("response truncated (max_tokens)")
+        result = _loads_json_response(message)
+    except Exception as e:
+        logger.warning("ground: could not parse response (non-fatal, keeping %d "
+                       "match(es)): %s [raw_preview=%r]",
+                       len(candidates), e, _message_text(message)[:300])
+        return _keep_all(), usage
+
+    by_id = {r.get("id"): r for r in result.get("results", []) if r.get("id") is not None}
+    out: list[dict] = []
+    for c in candidates:
+        r = by_id.get(c["id"])
+        if r is None:                       # model omitted it -> keep, no crop
+            out.append({"past_paper_question_id": c["id"], "supported": True,
+                        "reasoning": "", "bbox_pct": None, "snippet": ""})
+            continue
+        out.append({
+            "past_paper_question_id": c["id"],
+            "supported": bool(r.get("supported", True)),
+            "reasoning": (r.get("reasoning") or "").strip(),
+            "bbox_pct": _valid_bbox(r.get("bbox_pct")),
+            "snippet": (r.get("snippet") or "").strip(),
+        })
+    logger.info("ground: KO %s - %d/%d candidate(s) supported (cost $%.4f)",
+                ko_point.get("id"), sum(1 for r in out if r["supported"]),
+                len(out), usage["cost_usd"])
+    return out, usage
