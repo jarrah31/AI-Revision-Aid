@@ -260,6 +260,21 @@ Alpine.data('reviewCategoryPage', () => ({
                                     class="border-l-2 border-indigo-300 pl-3 text-xs text-gray-600 italic"
                                     x-text="q.source_context"></blockquote>
 
+                        <!-- KO grounding: where in the KO this exam question is answered -->
+                        <div x-show="q.ko_crop_filename || q.ko_grounding_reasoning"
+                             class="rounded-lg border border-emerald-200 bg-emerald-50/40 p-2 space-y-2">
+                            <p class="text-xs font-medium text-emerald-700">Where in the KO</p>
+                            <p x-show="q.ko_grounding_reasoning"
+                               class="text-xs text-gray-600"
+                               x-text="q.ko_grounding_reasoning"></p>
+                            <img x-show="q.ko_crop_filename"
+                                 :src="'/images/' + q.ko_crop_filename"
+                                 class="max-h-40 rounded border border-emerald-200 cursor-zoom-in"
+                                 @click="window.open('/images/' + q.ko_crop_filename, '_blank')"
+                                 @error="$el.style.display='none'"
+                                 alt="KO region">
+                        </div>
+
                         <!-- Page thumbnail -->
                         <div x-show="q.batch_id && q.page_number"
                              class="rounded-lg border border-gray-200 overflow-hidden">
