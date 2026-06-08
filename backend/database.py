@@ -360,6 +360,10 @@ def init_db():
         # show a "verified mark scheme" badge so students know the expected
         # answer is authoritative rather than AI-inferred. Default 0 = unverified.
         "ALTER TABLE questions ADD COLUMN answer_from_mark_scheme INTEGER NOT NULL DEFAULT 0",
+        # Grounding evidence for a blended KO→past-paper match: written reasoning
+        # for where the answer lives in the KO, and the cropped KO-region filename.
+        "ALTER TABLE questions ADD COLUMN ko_grounding_reasoning TEXT DEFAULT NULL",
+        "ALTER TABLE questions ADD COLUMN ko_crop_filename TEXT DEFAULT NULL",
     ]:
         try:
             db.execute(migration)

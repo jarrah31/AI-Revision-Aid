@@ -1083,3 +1083,10 @@ def test_past_paper_null_bbox_does_not_drop_page(
     assert question is not None
     assert question["question_text"] == "Identify the labelled part."
     assert not (batch["error_message"] or "")
+
+
+def test_questions_table_has_ko_grounding_columns(db_conn):
+    """The blend-grounding migration adds reasoning + crop columns to questions."""
+    cols = {row[1] for row in db_conn.execute("PRAGMA table_info(questions)").fetchall()}
+    assert "ko_grounding_reasoning" in cols
+    assert "ko_crop_filename" in cols
