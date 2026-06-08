@@ -186,6 +186,12 @@ def _attach_source_meta(questions: list[dict], db: sqlite3.Connection) -> None:
             # True only when the answer was taken verbatim from an uploaded mark
             # scheme — drives the "verified mark scheme" badge in the quiz UI.
             prov["mark_scheme_verified"] = bool(q.get("answer_from_mark_scheme"))
+            reasoning = q.get("ko_grounding_reasoning")
+            if reasoning:
+                prov["ko_reasoning"] = reasoning
+            crop = q.get("ko_crop_filename")
+            if crop:
+                prov["ko_crop_url"] = "/images/" + crop
         q["provenance"] = prov
 
 

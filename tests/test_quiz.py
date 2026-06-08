@@ -770,3 +770,27 @@ def test_start_quiz_provenance_blended_uses_source_batch(
     assert prov["filename"] == "exam-paper1F.pdf"     # the EXAM batch, not booklet.pdf
     assert prov["paper_number"] == "Paper 1"
     assert prov["tier"] == "Foundation"
+
+
+def test_provenance_includes_ko_grounding(
+    client, user_headers, regular_user, make_subject, make_batch, make_question, db_conn
+):
+    """A grounded blended question exposes reasoning + crop URL in provenance;
+    a plain past-paper question without grounding does not."""
+    uid, _ = regular_user
+    sid = make_subject()
+    b = make_batch(uid, sid, filename="pp.pdf")
+    _set_batch_type(db_conn, b, "past_paper")   # past_paper source filter needs this
+    qid = make_question(b, uid, sid, question_source="past_paper")
+    db_conn.execute(
+        "UPDATE questions SET ko_grounding_reasoning = ?, ko_crop_filename = ? WHERE id = ?",
+        ("Organ is defined here.", "batch_1/page_1_kocrop_1_2.png", qid))
+    db_conn.commit()
+
+    r = client.post("/api/quiz/start",
+                    json={"subject_id": sid, "question_sources": ["past_paper"], "count": 5},
+                    headers=user_headers)
+    assert r.status_code == 200
+    q = next(x for x in r.json()["questions"] if x["id"] == qid)
+    assert q["provenance"]["ko_reasoning"] == "Organ is defined here."
+    assert q["provenance"]["ko_crop_url"] == "/images/batch_1/page_1_kocrop_1_2.png"
